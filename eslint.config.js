@@ -1,8 +1,9 @@
 import js from '@eslint/js';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
-/** Flat config dipakai seluruh workspace (ESLint 9). */
-export default [
+/** Flat config dipakai seluruh workspace (ESLint 9 + typescript-eslint). */
+export default tseslint.config(
   {
     ignores: [
       '**/node_modules/**',
@@ -12,27 +13,19 @@ export default [
     ],
   },
   js.configs.recommended,
+  ...tseslint.configs.recommended,
   {
-    files: ['**/*.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
-      globals: {
-        ...globals.node,
-      },
+      globals: { ...globals.node },
     },
     rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
       'no-console': 'off',
     },
   },
-  {
-    files: ['**/tests/**', '**/*.test.js'],
-    languageOptions: {
-      globals: {
-        ...globals.node,
-        ...globals.vitest,
-      },
-    },
-  },
-];
+);

@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/index.ts",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
     "test": "vitest run",
-    "loadtest": "node scripts/loadtest.js"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "loadtest": "node scripts/loadtest.ts"
   },
   "dependencies": {
     "@ecommerce/logger": "*",
@@ -24,6 +25,9 @@
     "fastify": "^5.2.1"
   },
   "devDependencies": {
-    "autocannon": "^8.0.0"
+    "@types/autocannon": "^7.12.7",
+    "@types/node": "^22.10.6",
+    "autocannon": "^8.0.0",
+    "typescript": "^5.7.3"
   }
 }

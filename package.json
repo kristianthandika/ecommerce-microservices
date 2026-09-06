@@ -13,18 +13,23 @@
     "frontend"
   ],
   "scripts": {
+    "build:packages": "npm run build --workspace=packages/logger --workspace=packages/resilient-http-client",
     "dev:all": "concurrently -n auth,product,order,gateway -c blue,green,magenta,cyan \"npm run dev --workspace=services/auth-service\" \"npm run dev --workspace=services/product-service\" \"npm run dev --workspace=services/order-service\" \"npm run dev --workspace=services/gateway\"",
     "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "format": "prettier --write .",
     "loadtest": "npm run loadtest --workspace=services/gateway"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.6",
     "concurrently": "^9.1.2",
     "eslint": "^9.17.0",
     "globals": "^15.14.0",
     "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
     "vitest": "^3.0.5"
   }
 }

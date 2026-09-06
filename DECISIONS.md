@@ -2,6 +2,25 @@
 
 Keputusan teknis yang diambil selama membangun sistem, beserta alasannya.
 
+## Bahasa: TypeScript untuk semua project
+
+- **Seluruh workspace pakai TypeScript** (bukan JavaScript).
+- **Shared packages** (`logger`, `resilient-http-client`) **dikompilasi ke `dist/`**
+  dengan `tsc` (+ `.d.ts`). Alasan: Node 24 menolak strip types untuk file di
+  bawah `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), sedangkan
+  workspace package dikonsumsi lewat symlink di `node_modules`. Jadi package =
+  library terkompilasi.
+- **Services** (`auth`/`product`/`order`/`gateway`) **dijalankan langsung sebagai
+  `.ts`** via type stripping bawaan Node 24 (`node src/index.ts`) — tanpa build
+  step. Type-safety dijaga terpisah lewat `tsc --noEmit` (`npm run typecheck`).
+- **Frontend** tetap Vite + TS (esbuild). `vite` dipin ke satu versi (7.x) di
+  root supaya tidak ada duplikat copy yang bikin bentrok tipe plugin.
+- **Import relatif pakai ekstensi `.ts`** (bukan `.js`). Node type stripping
+  butuh path file yang sesungguhnya; TS 5.7 `rewriteRelativeImportExtensions`
+  menulis ulang ke `.js` saat `tsc` meng-emit package.
+- `tsconfig.base.json` di root jadi basis semua workspace (`module`/`resolution`
+  `nodenext`, `strict`).
+
 ## Arsitektur & scope
 
 - **Penyimpanan in-memory (bukan database sungguhan)** — simplifikasi disengaja
