@@ -1,0 +1,30 @@
+{
+  "name": "ecommerce-microservices",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E-Commerce Microservices reference & training kit — Inixindo Bandung",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:all": "concurrently -n auth,product,order,gateway -c blue,green,magenta,cyan \"npm run dev --workspace=services/auth-service\" \"npm run dev --workspace=services/product-service\" \"npm run dev --workspace=services/order-service\" \"npm run dev --workspace=services/gateway\"",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "loadtest": "npm run loadtest --workspace=services/gateway"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "vitest": "^3.0.5"
+  }
+}
