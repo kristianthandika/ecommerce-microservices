@@ -13,9 +13,14 @@ import {
 } from './products.ts';
 
 const productSchema = z.object({
-  name: z.string().min(1, 'Nama produk wajib diisi'),
-  price: z.number().positive('Harga harus lebih dari 0'),
-  stock: z.number().int().nonnegative('Stok tidak boleh negatif').default(0),
+  name: z.string().min(1, 'Nama produk wajib diisi').max(200, 'Nama terlalu panjang'),
+  price: z.number().positive('Harga harus lebih dari 0').max(1_000_000_000, 'Harga tidak wajar'),
+  stock: z
+    .number()
+    .int()
+    .nonnegative('Stok tidak boleh negatif')
+    .max(1_000_000, 'Stok tidak wajar')
+    .default(0),
 });
 const productUpdateSchema = productSchema.partial();
 

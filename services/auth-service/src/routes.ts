@@ -6,8 +6,9 @@ import { getKeyMaterial } from './keys.ts';
 import { register, login, getUserById } from './users.ts';
 
 const credentialsSchema = z.object({
-  email: z.string().email('Email tidak valid'),
-  password: z.string().min(8, 'Password minimal 8 karakter'),
+  email: z.string().email('Email tidak valid').max(254, 'Email terlalu panjang'),
+  // Batas atas mencegah DoS lewat hashing string sangat besar.
+  password: z.string().min(8, 'Password minimal 8 karakter').max(200, 'Password terlalu panjang'),
 });
 type Credentials = z.infer<typeof credentialsSchema>;
 

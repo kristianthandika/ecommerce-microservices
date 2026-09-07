@@ -8,11 +8,14 @@ const orderSchema = z.object({
   items: z
     .array(
       z.object({
-        productId: z.string().min(1, 'productId wajib'),
-        quantity: z.number().int().positive('quantity harus > 0'),
+        productId: z.string().min(1, 'productId wajib').max(100),
+        // Batas atas mencegah nilai absurd; batas array mencegah satu request
+        // memicu ratusan panggilan ke product-service (amplifikasi/DoS).
+        quantity: z.number().int().positive('quantity harus > 0').max(1000),
       }),
     )
-    .min(1, 'Order harus punya minimal 1 item'),
+    .min(1, 'Order harus punya minimal 1 item')
+    .max(50, 'Maksimal 50 item per order'),
 });
 type OrderInput = z.infer<typeof orderSchema>;
 

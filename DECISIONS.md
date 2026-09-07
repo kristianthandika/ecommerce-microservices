@@ -77,6 +77,22 @@ merapikan" — browser akan kehilangan ACAO pada request lewat gateway.
   linear dengan jumlah item.
 - **auth getUserById**: indeks by-id (O(1)) menggantikan linear scan.
 
+## Perbaikan hasil security review
+
+- **Batas ukuran input** (anti-DoS/amplifikasi): `items` order dibatasi maks 50 &
+  quantity maks 1000 (satu request tidak bisa memicu ratusan panggilan ke
+  product-service); nama/harga/stok produk & panjang email/password diberi batas
+  atas wajar.
+- **Header keamanan frontend** (nginx): `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`. CSP sengaja tidak di-hardcode
+  (bergantung origin gateway per-deployment).
+- **Dependency**: `bcrypt` → v6 (menghapus rantai rentan `node-pre-gyp`/`tar`);
+  OpenTelemetry SDK dinaikkan (`@opentelemetry/core` ≥ 2.8, menutup advisory
+  W3C Baggage) sekaligus membuang 50 paket exporter OTLP yang tak dipakai.
+  Hasil: `npm audit --omit=dev` = **0 kerentanan produksi**. Sisa kerentanan
+  hanya di devDependency (vite/vitest/esbuild/autocannon) — tidak masuk image
+  runtime.
+
 ## Catatan lain
 
 - (diisi bila ada blocker/command interaktif yang butuh penanganan khusus)
