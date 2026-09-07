@@ -138,8 +138,15 @@ Karena service dijalankan sebagai `.ts` dan shared package dikompilasi, jalankan
 | 4 | `m4.4-docker-compose` | orkestrasi, healthcheck-gated |
 | 4 | `m4.5-capstone` | chaos, production checklist, README |
 
-Rincian tiap fitur + jebakan debugging juga terangkum di
-[`docs/EXERCISES.md`](docs/EXERCISES.md).
+Rincian tiap fitur + jebakan debugging ada sebagai satu file `.md` per fitur di
+[`docs/exercises/`](docs/exercises/) (akumulatif di tiap branch). Untuk membuka
+starter & solution sebuah fitur berdampingan:
+
+```bash
+bash scripts/dev/worktrees.sh m2.2      # buat worktree starter & solution
+bash scripts/dev/worktrees.sh --list    # daftar fitur
+bash scripts/dev/worktrees.sh --clean   # bersihkan
+```
 
 ## Chaos test (capstone)
 
@@ -168,7 +175,8 @@ di beban tinggi — itu **fitur** (proteksi), terlihat sebagai respons non-2xx.
 packages/       logger, resilient-http-client (library, dikompilasi ke dist)
 services/       auth-service, product-service, order-service, gateway
 frontend/       React + Vite + Tailwind (build → nginx)
-docs/           BOUNDARY.md, PRODUCTION-CHECKLIST.md, EXERCISES.md
+docs/           BOUNDARY.md, PRODUCTION-CHECKLIST.md, exercises/ (per fitur)
+scripts/dev/    worktrees.sh (buka starter & solution berdampingan)
 ```
 
 ## Docker Compose vs Kubernetes (ringkas)
@@ -191,4 +199,4 @@ Kubernetes. Langkah menuju production: [`docs/PRODUCTION-CHECKLIST.md`](docs/PRO
 - **Penyimpanan in-memory** (bukan database) — simplifikasi disengaja untuk
   scope training; lihat `docs/PRODUCTION-CHECKLIST.md`.
 - Keputusan teknis & trade-off: [`DECISIONS.md`](DECISIONS.md).
-- Latihan per-fitur & jebakan debugging: [`docs/EXERCISES.md`](docs/EXERCISES.md).
+- Latihan per-fitur & jebakan debugging: [`docs/exercises/`](docs/exercises/) (satu file per fitur).
