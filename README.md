@@ -83,6 +83,64 @@ npm run typecheck # tsc --noEmit semua workspace
 npm run lint      # eslint (typescript-eslint)
 ```
 
+## Alur Pelatihan (branch starter/solution)
+
+Selain kode lengkap di `main`, repo ini menyediakan **16 fitur** (`mX.Y`)
+sebagai **pasangan branch** untuk praktikum langsung. Tiap fitur punya:
+
+- **`starter/mX.Y-…`** — kondisi SEBELUM fitur + `EXERCISE.md` (tujuan, yang
+  perlu dibangun, acceptance, dan **jebakan debugging spesifik** fitur itu).
+  Implementasi fitur belum ada — inilah titik mulai peserta.
+- **`solution/mX.Y-…`** — kondisi SESUDAH: implementasi lengkap + test lulus.
+
+Solution satu fitur menjadi starter fitur berikutnya, jadi seluruhnya membentuk
+rantai berurutan. `solution/m4.5` = isi `main`.
+
+### Cara memakai di kelas
+
+```bash
+# 1. Mulai dari starter fitur yang sedang dipelajari
+git checkout starter/m2.2-resilient-http-client
+cat EXERCISE.md                 # baca tujuan + acceptance + cara debugging
+
+# 2. Peserta mengimplementasikan fitur...
+npm run build:packages          # bila fitur menyentuh shared package
+npm test                        # jalankan test terkait
+
+# 3. Bandingkan / lihat kunci jawaban
+git diff solution/m2.2-resilient-http-client     # apa yang seharusnya berubah
+git checkout solution/m2.2-resilient-http-client # solusi lengkap + test
+```
+
+`npm install` cukup **sekali** untuk semua branch (dependency root konstan).
+Karena service dijalankan sebagai `.ts` dan shared package dikompilasi, jalankan
+`npm run build:packages` setiap berada di branch yang sudah memuat
+`packages/*` sebelum menjalankan service/test service.
+
+### Peta fitur → branch
+
+| Modul | Fitur (slug branch) | Fokus |
+|---|---|---|
+| 0 | `m0.1-monorepo-bootstrap` | npm workspaces, toolchain TS |
+| 0 | `m0.2-brand-shared-infra` | `packages/logger`, brand frontend |
+| 1 | `m1.1-service-boundary` | DDD ringan, `docs/BOUNDARY.md` |
+| 1 | `m1.2-auth-bootstrap` | Express 5, security middleware, error handler, zod |
+| 1 | `m1.3-auth-jwt-jwks` | bcrypt, JWT RS256, JWKS, `kid` |
+| 2 | `m2.1-product-distributed-auth` | verifikasi JWT via `jwks-rsa` (cache), RBAC |
+| 2 | `m2.2-resilient-http-client` | timeout/retry/circuit breaker manual |
+| 2 | `m2.3-order-chaos` | order-service + chaos test |
+| 3 | `m3.1-api-gateway` | Fastify proxy, rate-limit, X-Forwarded-For |
+| 3 | `m3.2-correlation-id` | correlation ID lintas service |
+| 3 | `m3.3-health-tracing-loadtest` | health agregat, `@fastify/otel`, autocannon |
+| 4 | `m4.1-frontend-auth` | React auth flow, error seragam |
+| 4 | `m4.2-health-widget` | live service-health widget |
+| 4 | `m4.3-containerization` | Dockerfile multi-stage, non-root, nginx |
+| 4 | `m4.4-docker-compose` | orkestrasi, healthcheck-gated |
+| 4 | `m4.5-capstone` | chaos, production checklist, README |
+
+Rincian tiap fitur + jebakan debugging juga terangkum di
+[`docs/EXERCISES.md`](docs/EXERCISES.md).
+
 ## Chaos test (capstone)
 
 Buktikan resilience & pemulihan otomatis saat satu service tumbang:
