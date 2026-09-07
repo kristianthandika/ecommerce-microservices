@@ -11,13 +11,16 @@
 # =============================================================================
 set -euo pipefail
 
+# Path absolut skrip ini DULU (sebelum cd) supaya usage() tetap bisa membaca
+# komentarnya sendiri walau dijalankan dari direktori mana pun.
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # pindah ke root repo (dua level di atas skrip ini)
 cd "$(dirname "$0")/../.."
 REPO_NAME="$(basename "$PWD")"
 WT_BASE="$(cd .. && pwd)/${REPO_NAME}-worktrees"
 
 usage() {
-  grep '^#' "$0" | sed 's/^# \{0,1\}//;1d'
+  grep '^#' "$SELF" | sed 's/^# \{0,1\}//;1d'
   exit "${1:-0}"
 }
 
@@ -25,13 +28,28 @@ list_features() {
   git branch --list 'starter/*' | sed 's#^[* ]*starter/##' | sort
 }
 
-resolve() { # $1 = mX.Y atau slug penuh; echo "starter_branch solution_branch slug"
-  local q="$1"
-  local s
-  s="$(git branch --list "starter/${q}*" | head -1 | sed 's/^[* ]*//')"
-  [ -z "$s" ] && { echo "Fitur '$q' tidak ditemukan. Coba --list." >&2; exit 1; }
-  local slug="${s#starter/}"
-  echo "starter/${slug} solution/${slug} ${slug}"
+# resolve <mX.Y|slug> → cetak slug tunggal. Error kalau tak ada, ambigu, atau
+# pasangan solution-nya tidak ada. Tidak memakai `head` (hindari SIGPIPE + pipefail).
+resolve() {
+  local q="$1" matches count slug
+  matches="$(git branch --list "starter/${q}*" | sed 's#^[* ]*starter/##')"
+  count="$(printf '%s' "$matches" | grep -c . || true)"
+  if [ "$count" -eq 0 ]; then
+    echo "Fitur '$q' tidak ditemukan. Coba --list." >&2
+    exit 1
+  fi
+  if [ "$count" -gt 1 ]; then
+    echo "Prefix '$q' ambigu, cocok dengan beberapa fitur:" >&2
+    printf '  %s\n' $matches >&2
+    echo "Sebutkan fitur yang lebih spesifik." >&2
+    exit 1
+  fi
+  slug="$matches"
+  if ! git show-ref --verify --quiet "refs/heads/solution/${slug}"; then
+    echo "Branch 'solution/${slug}' tidak ada (pasangan solution belum dibuat)." >&2
+    exit 1
+  fi
+  printf '%s\n' "$slug"
 }
 
 clean() {
@@ -45,7 +63,8 @@ clean() {
     git worktree prune
     echo "Semua worktree dibersihkan."
   else
-    read -r sb so slug < <(resolve "$1")
+    local slug
+    slug="$(resolve "$1")"
     for kind in starter solution; do
       local dir="$WT_BASE/${slug}-${kind}"
       [ -d "$dir" ] && git worktree remove --force "$dir" 2>/dev/null || true
@@ -61,16 +80,16 @@ case "${1:-}" in
   --clean) clean "${2:-}"; exit 0 ;;
 esac
 
-read -r STARTER SOLUTION SLUG < <(resolve "$1")
+SLUG="$(resolve "$1")"
 mkdir -p "$WT_BASE"
 
 for kind in starter solution; do
-  branch="starter/${SLUG}"; [ "$kind" = solution ] && branch="solution/${SLUG}"
+  branch="${kind}/${SLUG}"
   dir="$WT_BASE/${SLUG}-${kind}"
   if [ -d "$dir" ]; then
     echo "sudah ada: $dir"
   else
-    git worktree add "$dir" "$branch" >/dev/null
+    git worktree add "$dir" "$branch" >/dev/null 2>&1
     echo "worktree $kind  → $dir   (branch $branch)"
   fi
 done
@@ -81,8 +100,7 @@ Selesai. Buka dua folder ini berdampingan di editor:
   starter : $WT_BASE/${SLUG}-starter
   solution: $WT_BASE/${SLUG}-solution
 
-Tips: 'npm install' dijalankan di repo utama sudah cukup (node_modules dibagi),
-tapi worktree tidak berbagi node_modules — jalankan 'npm install' di tiap
-worktree bila ingin menjalankan test di sana, lalu 'npm run build:packages'.
-Bersihkan dengan: bash scripts/dev/worktrees.sh --clean ${SLUG}
+Tips: worktree tidak berbagi node_modules dengan repo utama — jalankan
+'npm install' lalu 'npm run build:packages' di worktree bila ingin menjalankan
+test di sana. Bersihkan dengan: bash scripts/dev/worktrees.sh --clean ${SLUG}
 EOF
