@@ -27,8 +27,21 @@ interface Credentials {
 /**
  * User store IN-MEMORY (bukan database sungguhan) — simplifikasi disengaja
  * untuk scope training, lihat README & docs/PRODUCTION-CHECKLIST.md.
+ * Diindeks by email (login) DAN by id (lookup /me) supaya keduanya O(1).
  */
 const usersByEmail = new Map<string, User>();
+const usersById = new Map<string, User>();
+
+// Hash "umpan" untuk dibandingkan saat email tidak dikenal → login memakan
+// waktu yang sama seperti email dikenal (mitigasi timing attack / user
+// enumeration). Dihitung sekali (lazy) dengan salt rounds yang sama.
+let dummyHash: string | null = null;
+function getDummyHash(): string {
+  if (dummyHash === null) {
+    dummyHash = bcrypt.hashSync('dummy-password-for-timing-safety', config.bcryptSaltRounds);
+  }
+  return dummyHash;
+}
 
 async function createUser({
   email,
@@ -38,6 +51,7 @@ async function createUser({
   const passwordHash = await bcrypt.hash(password, config.bcryptSaltRounds);
   const user: User = { id: randomUUID(), email, role, passwordHash };
   usersByEmail.set(email, user);
+  usersById.set(user.id, user);
   return user;
 }
 
@@ -55,9 +69,10 @@ export async function login({
   password,
 }: Credentials): Promise<{ token: string; user: PublicUser }> {
   const user = usersByEmail.get(email);
-  // Bandingkan hash walau user tak ada (mitigasi timing attack ringan).
-  // Urutan argumen: compare(plainPassword, hash).
-  const ok = user ? await bcrypt.compare(password, user.passwordHash) : false;
+  // SELALU jalankan bcrypt.compare — walau email tak dikenal, bandingkan dengan
+  // hash umpan supaya waktu respons konsisten (tanpa ini, email tak dikenal
+  // balik ~instan → bocor lewat timing). Urutan argumen: compare(plain, hash).
+  const ok = await bcrypt.compare(password, user ? user.passwordHash : getDummyHash());
   if (!user || !ok) {
     throw new AppError(401, 'Email atau password salah', undefined, 'INVALID_CREDENTIALS');
   }
@@ -81,10 +96,8 @@ function publicUser(user: User): PublicUser {
 }
 
 export function getUserById(id: string): PublicUser | null {
-  for (const user of usersByEmail.values()) {
-    if (user.id === id) return publicUser(user);
-  }
-  return null;
+  const user = usersById.get(id);
+  return user ? publicUser(user) : null;
 }
 
 /** Seed satu admin demo saat startup (kredensial demo — lihat DECISIONS.md). */
@@ -101,4 +114,5 @@ export async function seedAdmin(logger?: Logger): Promise<void> {
 /** Hanya untuk test — kosongkan store. */
 export function _resetUsers(): void {
   usersByEmail.clear();
+  usersById.clear();
 }

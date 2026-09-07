@@ -33,6 +33,30 @@ describe('withTimeout', () => {
     const res = await wrapped('http://x');
     expect(res.status).toBe(200);
   });
+
+  it('pembatalan oleh caller diteruskan sebagai AbortError (bukan TimeoutError)', async () => {
+    const controller = new AbortController();
+    const slow = (_url: string, options: RequestInit = {}) =>
+      new Promise<Response>((_resolve, reject) => {
+        options.signal?.addEventListener('abort', () => {
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      });
+    const wrapped = withTimeout(slow, 1000);
+    const p = wrapped('http://x', { signal: controller.signal });
+    controller.abort();
+    let err: unknown;
+    try {
+      await p;
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TimeoutError);
+    expect((err as Error).name).toBe('AbortError');
+  });
 });
 
 describe('withRetry', () => {
@@ -121,6 +145,27 @@ describe('withCircuitBreaker', () => {
     expect(states).toContain('OPEN');
     expect(states).toContain('HALF_OPEN');
     expect(states[states.length - 1]).toBe('CLOSED');
+  });
+
+  it('HALF_OPEN hanya mengizinkan SATU probe walau ada request konkuren', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const target = async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await sleep(30);
+      active -= 1;
+      throw new Error('masih gagal'); // probe gagal
+    };
+    const wrapped = withCircuitBreaker(target, { failureThreshold: 1, resetTimeoutMs: 20 });
+
+    await wrapped('http://x').catch(() => {}); // 1 gagal → OPEN (threshold 1)
+    await sleep(30); // > resetTimeout → probe berikutnya diizinkan (HALF_OPEN)
+
+    const results = await Promise.allSettled([wrapped('http://x'), wrapped('http://x')]);
+    expect(maxActive).toBe(1); // hanya satu probe menembus ke target
+    const reasons = results.map((r) => (r.status === 'rejected' ? r.reason : null));
+    expect(reasons.some((e) => e instanceof CircuitOpenError)).toBe(true); // satunya ditolak cepat
   });
 });
 

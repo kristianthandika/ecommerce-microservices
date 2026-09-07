@@ -36,20 +36,24 @@ export async function createOrder(
   { userId, items }: { userId: string; items: OrderItemInput[] },
   ctx: { correlationId?: string } = {},
 ): Promise<Order> {
-  const lineItems: OrderLineItem[] = [];
-  for (const item of items) {
-    const product = await fetchProduct(item.productId, ctx); // bisa throw AppError 503/404
+  // Lookup produk independen antar-item → jalankan paralel supaya latency tidak
+  // tumbuh linear dengan jumlah item (hanya ~satu round-trip). Urutan hasil
+  // tetap sesuai `items` (Promise.all mempertahankan urutan).
+  const products = await Promise.all(items.map((item) => fetchProduct(item.productId, ctx)));
+
+  const lineItems: OrderLineItem[] = items.map((item, i) => {
+    const product = products[i];
     if (product.stock < item.quantity) {
       throw new AppError(409, `Stok produk ${product.name} tidak cukup`, undefined, 'OUT_OF_STOCK');
     }
-    lineItems.push({
+    return {
       productId: product.id,
       name: product.name,
       unitPrice: product.price,
       quantity: item.quantity,
       subtotal: product.price * item.quantity,
-    });
-  }
+    };
+  });
 
   const total = lineItems.reduce((sum, li) => sum + li.subtotal, 0);
   const order: Order = {

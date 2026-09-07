@@ -63,12 +63,23 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  // Body mungkin BUKAN JSON (mis. proxy 502/504 dengan body HTML/teks saat
+  // backend tak terjangkau). Jangan biarkan JSON.parse melempar SyntaxError
+  // yang lolos dari normalisasi error di bawah.
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+  }
 
   if (!res.ok) {
     // Normalisasi: service berbeda bisa punya bentuk error berbeda, tapi kita
     // selalu memakai { error: { message, code, details } }.
-    const err = (data && data.error) || {};
+    const err = ((data as { error?: { message?: string; code?: string; details?: unknown } } | null)
+      ?.error) ?? {};
     throw new ApiError(
       err.message || res.statusText || 'Terjadi kesalahan',
       res.status,

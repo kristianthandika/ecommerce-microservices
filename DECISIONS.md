@@ -53,6 +53,30 @@ Keputusan teknis yang diambil selama membangun sistem, beserta alasannya.
 - Palet brand Inixindo Bandung diterapkan sebagai token CSS + di
   `tailwind.config`. Font Poppins (Google Fonts) dengan fallback system stack.
 
+## CORS: gateway DAN service backend (disengaja, bukan duplikasi)
+
+Setiap service Express memasang `cors` DAN gateway memasang `@fastify/cors`.
+Ini terlihat redundan, tapi **diperlukan**: `@fastify/http-proxy` meneruskan
+header CORS dari upstream, dan `@fastify/cors` TIDAK menambahkan
+`Access-Control-Allow-Origin` pada respons yang di-proxy. Terverifikasi: respons
+proxied hanya membawa SATU header ACAO (dari service backend), bukan duplikat.
+Karena itu `CORS_ORIGIN` service backend di-set ke origin frontend (via env di
+`docker-compose.yml`). JANGAN menghapus CORS dari service backend "untuk
+merapikan" — browser akan kehilangan ACAO pada request lewat gateway.
+
+## Perbaikan hasil code review (keamanan & edge case)
+
+- **auth login**: selalu jalankan `bcrypt.compare` (dengan hash umpan saat email
+  tak dikenal) → menutup timing oracle untuk user enumeration.
+- **resilient client**: pembatalan oleh caller tidak lagi salah diklasifikasi
+  sebagai `TimeoutError`; circuit breaker HALF_OPEN hanya mengizinkan SATU probe
+  konkuren (tidak membanjiri upstream yang belum pulih).
+- **frontend api client**: `JSON.parse` dibungkus try/catch → body non-JSON
+  (mis. 502/504 dari proxy) tetap jadi `ApiError` yang seragam.
+- **order create**: lookup produk paralel (`Promise.all`) → latency tidak tumbuh
+  linear dengan jumlah item.
+- **auth getUserById**: indeks by-id (O(1)) menggantikan linear scan.
+
 ## Catatan lain
 
 - (diisi bila ada blocker/command interaktif yang butuh penanganan khusus)

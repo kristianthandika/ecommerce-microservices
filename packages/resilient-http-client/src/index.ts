@@ -49,7 +49,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export function withTimeout(fetchFn: FetchFn, ms: number): FetchFn {
   return async (url, options = {}) => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ms);
 
     if (options.signal) {
       if (options.signal.aborted) controller.abort();
@@ -59,7 +63,10 @@ export function withTimeout(fetchFn: FetchFn, ms: number): FetchFn {
     try {
       return await fetchFn(url, { ...options, signal: controller.signal });
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError' && controller.signal.aborted) {
+      // HANYA klasifikasikan sebagai TimeoutError kalau timeout yang memicu abort.
+      // Pembatalan oleh caller (options.signal) diteruskan apa adanya (jangan
+      // di-retry sebagai timeout).
+      if (timedOut && err instanceof Error && err.name === 'AbortError') {
         throw new TimeoutError(ms);
       }
       throw err;
@@ -132,6 +139,7 @@ export function withCircuitBreaker(
   let state: CircuitState = 'CLOSED';
   let failures = 0;
   let nextAttempt = 0;
+  let probing = false; // true saat SATU probe HALF_OPEN sedang berjalan
 
   const transition = (next: CircuitState): void => {
     if (state !== next) {
@@ -143,16 +151,26 @@ export function withCircuitBreaker(
   return async (url, options = {}) => {
     if (state === 'OPEN') {
       if (Date.now() < nextAttempt) throw new CircuitOpenError(name);
-      transition('HALF_OPEN'); // waktu reset lewat → coba sekali
+      transition('HALF_OPEN'); // waktu reset lewat → izinkan satu probe
+    }
+
+    if (state === 'HALF_OPEN') {
+      // Hanya SATU probe yang boleh menembus saat HALF_OPEN; request lain yang
+      // datang bersamaan ditolak cepat supaya upstream yang belum pulih tidak
+      // dibanjiri (gate probe tunggal, walau ada request konkuren).
+      if (probing) throw new CircuitOpenError(name);
+      probing = true;
     }
 
     try {
       const res = await fetchFn(url, options);
       failures = 0;
+      probing = false;
       transition('CLOSED');
       return res;
     } catch (err) {
       failures += 1;
+      probing = false;
       if (state === 'HALF_OPEN' || failures >= failureThreshold) {
         transition('OPEN');
         nextAttempt = Date.now() + resetTimeoutMs;
