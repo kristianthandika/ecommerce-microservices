@@ -1,3 +1,5 @@
+> Catatan revisi: keputusan prototype di bawah mendokumentasikan versi training awal. Implementasi setelah audit memakai SQLite, reservasi stok atomik, idempotensi, dan konfigurasi keamanan pada [docs/HARDENING.md](docs/HARDENING.md).
+
 # DECISIONS.md — Catatan Keputusan Teknis
 
 Keputusan teknis yang diambil selama membangun sistem, beserta alasannya.
@@ -92,6 +94,33 @@ merapikan" — browser akan kehilangan ACAO pada request lewat gateway.
   Hasil: `npm audit --omit=dev` = **0 kerentanan produksi**. Sisa kerentanan
   hanya di devDependency (vite/vitest/esbuild/autocannon) — tidak masuk image
   runtime.
+
+## Keputusan lanjutan (14 November 2026)
+
+- **Sesi: access token pendek + refresh token berotasi** — access token 15 menit
+  tetap diverifikasi lokal via JWKS (tidak menambah panggilan ke auth-service per
+  request). Refresh token opaque di cookie `HttpOnly; SameSite=Strict` dirotasi
+  tiap pakai; pemakaian ulang di luar jendela 10 detik mencabut seluruh keluarga
+  sesi. Jendela 10 detik ada karena dua tab yang me-refresh bersamaan bukan
+  pencurian. Trade-off: token yang sudah terbit tidak bisa dicabut ≤15 menit.
+  Ini menggantikan keputusan m4.1 "refresh halaman = login ulang".
+- **Backoff login per akun, bukan lockout** — lockout permanen memberi penyerang
+  cara mengunci akun korban; backoff 30 detik–15 menit memperlambat tebakan
+  tanpa itu. Berlaku juga untuk email tak terdaftar (anti-enumerasi).
+- **Concurrency keranjang via `If-Match`/`ETag`** — mekanisme standar HTTP;
+  body pada `DELETE` tidak punya arti baku dan bisa dibuang proxy. Body
+  `version` diterima sementara dengan `Deprecation: true`.
+- **Pembatalan sebagai saga** — niat disimpan durable lebih dulu, pelepasan stok
+  idempotent, tombstone untuk reservasi yang masih di jalan. Tidak memakai
+  two-phase commit/event bus: recovery worker yang sudah ada cukup untuk satu
+  langkah kompensasi.
+- **Retensi Idempotency-Key 24 jam setelah order selesai** — hanya pemetaan yang
+  dihapus, order tetap. Key order yang belum selesai tidak pernah dihapus.
+- **Migrasi skema bertahap di storage** — daftar migrasi berurutan, tiap langkah
+  satu transaksi, backup `VACUUM INTO` sebelum migrasi data lama.
+- **Root filesystem read-only** untuk semua container; tmpfs dibatasi ukurannya.
+- **Ditunda dengan sengaja**: tabel relasional (menunggu pengukuran), OpenAPI dan
+  versi API, batas stok per pengguna (butuh keputusan bisnis).
 
 ## Catatan lain
 

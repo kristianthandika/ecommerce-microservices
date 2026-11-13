@@ -11,15 +11,15 @@ Langkah pertama: kumpulkan **domain event** (fakta yang sudah terjadi, past
 tense) tanpa memikirkan tabel/tabel dulu, lalu kelompokkan yang "lengket" satu
 sama lain.
 
-| Domain event | Dipicu oleh | Data inti |
-|---|---|---|
-| `UserRegistered` | calon pelanggan mendaftar | email, password (hash) |
-| `UserLoggedIn` | pelanggan login | kredensial → token |
-| `TokenIssued` | login sukses | JWT RS256 (klaim: sub, role) |
-| `ProductCreated` | admin menambah produk | nama, harga, stok |
-| `ProductUpdated` / `ProductDeleted` | admin mengelola katalog | id produk |
-| `ProductViewed` | siapa pun melihat katalog | id produk |
-| `OrderPlaced` | pelanggan membuat order | item, jumlah, harga saat itu |
+| Domain event                        | Dipicu oleh               | Data inti                    |
+| ----------------------------------- | ------------------------- | ---------------------------- |
+| `UserRegistered`                    | calon pelanggan mendaftar | email, password (hash)       |
+| `UserLoggedIn`                      | pelanggan login           | kredensial → token           |
+| `TokenIssued`                       | login sukses              | JWT RS256 (klaim: sub, role) |
+| `ProductCreated`                    | admin menambah produk     | nama, harga, stok            |
+| `ProductUpdated` / `ProductDeleted` | admin mengelola katalog   | id produk                    |
+| `ProductViewed`                     | siapa pun melihat katalog | id produk                    |
+| `OrderPlaced`                       | pelanggan membuat order   | item, jumlah, harga saat itu |
 
 Pengelompokan alami (garis lengket):
 
@@ -73,6 +73,7 @@ flowchart LR
 
 **a. Distributed monolith** (service terpisah tapi saling terkunci, harus
 deploy barengan):
+
 - Tidak ada pemanggilan sinkron auth-service di setiap request. product/order
   memverifikasi token dari **public key yang di-cache** (JWKS), jadi
   auth-service bisa restart tanpa mematikan verifikasi di service lain.
@@ -83,6 +84,7 @@ deploy barengan):
   fungsi internal lintas modul.
 
 **b. Nanoservice** (service terlalu kecil sampai overhead > manfaat):
+
 - Kita berhenti di **tiga** service domain + gateway, sejalan dengan tiga
   bounded context nyata dari event storming — bukan satu service per entity
   atau per endpoint. "User", "Product", "Order" adalah kapabilitas bisnis
@@ -90,6 +92,7 @@ deploy barengan):
 
 **c. Shared database** (banyak service menulis ke DB yang sama → coupling
 tersembunyi):
+
 - Setiap service memiliki **data store-nya sendiri** (di prototype ini:
   in-memory store terpisah per service; di production: database per service —
   lihat `PRODUCTION-CHECKLIST.md`). order-service **tidak** membaca tabel
