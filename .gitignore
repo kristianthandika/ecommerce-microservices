@@ -17,3 +17,9 @@ services/gateway/loadtest-*.json
 
 # TS build info
 *.tsbuildinfo
+
+.e2e/
+**/data/
+**/*.sqlite*
+
+.e2e-audit.json

@@ -1,0 +1,41 @@
+name: Verify services and Docker integration
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:packages
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit --audit-level=moderate
+  integration:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/setup.mjs --demo-admin
+      - run: docker compose up --build -d --wait --wait-timeout 180
+      - run: node scripts/e2e.mjs --chaos
+      - run: node scripts/e2e-shopping.mjs --chaos
+      - if: always()
+        run: mkdir -p .e2e && docker compose logs --no-color > .e2e/containers.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-results
+          path: .e2e/
+          include-hidden-files: true
+      - if: always()
+        run: docker compose down

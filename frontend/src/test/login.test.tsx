@@ -10,26 +10,54 @@ import App from '../App';
 function mockFetch(url: string) {
   if (url.endsWith('/auth/login')) {
     return Promise.resolve(
-      new Response(JSON.stringify({ token: 'fake.jwt.token', user: { id: 'u1', email: 'admin@inixindo.local', role: 'admin' } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+      new Response(
+        JSON.stringify({
+          token: `fake.${btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }))}.token`,
+          user: { id: 'u1', email: 'admin@inixindo.local', role: 'admin' },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
     );
   }
-  if (url.endsWith('/products')) {
+  if (new URL(url, 'http://localhost').pathname.endsWith('/products')) {
     return Promise.resolve(
-      new Response(JSON.stringify({ products: [{ id: 'p1', name: 'Kaos Inixindo', price: 120000, stock: 50 }] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+      new Response(
+        JSON.stringify({
+          products: [{ id: 'p1', name: 'Kaos Inixindo', price: 120000, stock: 50 }],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
     );
   }
+  if (url.endsWith('/cart'))
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          cart: { version: 'v1', items: [], quantity: 0, total: 0, canCheckout: false },
+        }),
+        { status: 200 },
+      ),
+    );
   if (url.endsWith('/health')) {
     return Promise.resolve(
-      new Response(JSON.stringify({ status: 'ok', gateway: 'up', services: { auth: 'up', product: 'up', order: 'up' }, timestamp: '' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+      new Response(
+        JSON.stringify({
+          status: 'ok',
+          gateway: 'up',
+          services: { auth: 'up', product: 'up', order: 'up' },
+          timestamp: '',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
     );
   }
   return Promise.resolve(new Response('{}', { status: 404 }));
@@ -37,7 +65,10 @@ function mockFetch(url: string) {
 
 describe('alur login frontend', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => mockFetch(String(input))));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => mockFetch(String(input))),
+    );
   });
   afterEach(() => {
     vi.unstubAllGlobals();

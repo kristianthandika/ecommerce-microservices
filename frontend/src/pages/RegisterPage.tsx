@@ -42,6 +42,7 @@ export function RegisterPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="username"
               className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-secondary focus:ring-1 focus:ring-secondary outline-none"
             />
           </label>
@@ -54,6 +55,7 @@ export function RegisterPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={8}
+              autoComplete="new-password"
               className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-secondary focus:ring-1 focus:ring-secondary outline-none"
             />
           </label>

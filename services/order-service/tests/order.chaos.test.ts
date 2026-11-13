@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { generateKeyPairSync, createPublicKey, createHash, type JsonWebKey } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
@@ -27,6 +28,7 @@ const token = jwt.sign({ role: 'user' }, privateKey, {
   keyid: kid,
   subject: 'user-1',
   issuer: 'auth-service',
+  audience: 'ecommerce-api',
   expiresIn: '1h',
 });
 
@@ -69,9 +71,25 @@ beforeAll(async () => {
       res.statusCode = 503;
       return res.end('unavailable');
     }
-    const id = req.url?.split('/').pop() ?? 'p1';
+    const id = req.url?.split('/').pop();
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ product: { id, name: 'Kaos', price: 100000, stock: 100 } }));
+    res.end(
+      JSON.stringify({
+        reservation: {
+          id,
+          items: [
+            {
+              productId: '11111111-1111-4111-8111-111111111111',
+              name: 'Kaos',
+              unitPrice: 100000,
+              quantity: 2,
+              subtotal: 200000,
+            },
+          ],
+          total: 200000,
+        },
+      }),
+    );
   });
   await new Promise<void>((r) => productDouble.listen(0, r));
   process.env.PRODUCT_SERVICE_URL = `http://127.0.0.1:${port(productDouble)}`;
@@ -92,8 +110,14 @@ afterAll(async () => {
 async function postOrder(): Promise<Response> {
   return fetch(`${orderBase}/orders`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ items: [{ productId: 'p1', quantity: 2 }] }),
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+      'idempotency-key': randomUUID(),
+    },
+    body: JSON.stringify({
+      items: [{ productId: '11111111-1111-4111-8111-111111111111', quantity: 2 }],
+    }),
   });
 }
 

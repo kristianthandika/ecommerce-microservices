@@ -20,9 +20,17 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
     req.user = jwt.verify(token, publicKeyPem, {
       algorithms: ['RS256'],
       issuer: config.jwt.issuer,
+      audience: 'ecommerce-api',
     }) as JwtPayload;
   } catch {
     throw new AppError(401, 'Token tidak valid');
   }
+  if (
+    !req.user ||
+    typeof req.user.sub !== 'string' ||
+    !req.user.sub ||
+    typeof req.user.exp !== 'number'
+  )
+    throw new AppError(401, 'Klaim token tidak valid');
   next();
 }

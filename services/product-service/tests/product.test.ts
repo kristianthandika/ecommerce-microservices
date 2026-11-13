@@ -24,6 +24,7 @@ const sign = (role: string): string =>
     keyid: kid,
     subject: `user-${role}`,
     issuer: 'auth-service',
+    audience: 'ecommerce-api',
     expiresIn: '1h',
   });
 const adminToken = sign('admin');
@@ -87,6 +88,20 @@ describe('product-service distributed auth & RBAC', () => {
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('nama produk berisi spasi saja → 400, dan nama valid di-trim', async () => {
+    const blank = await request(app)
+      .post('/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: '   ', price: 1000 });
+    expect(blank.status).toBe(400);
+    const padded = await request(app)
+      .post('/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: '  Topi Inixindo  ', price: 1000 });
+    expect(padded.status).toBe(201);
+    expect(padded.body.product.name).toBe('Topi Inixindo');
+  });
+
   it('POST admin valid → 201 (panggilan PERTAMA memicu fetch JWKS)', async () => {
     const res = await request(app)
       .post('/products')
@@ -94,6 +109,29 @@ describe('product-service distributed auth & RBAC', () => {
       .send({ name: 'Topi Inixindo', price: 90000, stock: 10 });
     expect(res.status).toBe(201);
     expect(jwksHits).toBeGreaterThanOrEqual(1);
+  });
+
+  it('banjir token palsu ber-kid acak TIDAK menghabiskan kuota JWKS milik user sah', async () => {
+    const hitsBefore = jwksHits;
+    for (let i = 0; i < 15; i += 1) {
+      const forged = jwt.sign({ role: 'admin' }, privateKey, {
+        algorithm: 'RS256',
+        keyid: `forged-${i}`,
+        subject: 'attacker',
+        issuer: 'auth-service',
+        audience: 'ecommerce-api',
+        expiresIn: '1h',
+      });
+      const res = await request(app)
+        .get('/products/admin/summary')
+        .set('Authorization', `Bearer ${forged}`);
+      expect(res.status).toBe(401); // bukan 503: kuota fetch tidak ikut habis
+    }
+    expect(jwksHits - hitsBefore).toBeLessThanOrEqual(1); // dibatasi cooldown
+    const legit = await request(app)
+      .get('/products/admin/summary')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(legit.status).toBe(200);
   });
 
   it('setelah auth-service MATI, verifikasi token berikutnya TETAP berhasil (cache jwks-rsa)', async () => {

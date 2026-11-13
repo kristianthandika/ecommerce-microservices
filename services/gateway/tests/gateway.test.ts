@@ -33,7 +33,7 @@ const listen = (server: Server): Promise<number> =>
 
 beforeAll(async () => {
   process.env.LOG_LEVEL = 'silent';
-  process.env.GATEWAY_RATE_LIMIT_MAX = '1000';
+  process.env.GATEWAY_RATE_LIMIT_MAX = '20';
 
   authDouble = makeDouble('auth-service');
   productDouble = makeDouble('product-service', true);
@@ -50,6 +50,15 @@ beforeAll(async () => {
   const { buildApp } = await import('../src/app.ts');
   app = await buildApp({ enableTracing: false });
   await app.ready();
+});
+
+it('rate-limit exhaustion returns a consistent 429 rather than 500', async () => {
+  let response = await app.inject({ method: 'GET', url: '/products', remoteAddress: '192.0.2.99' });
+  for (let i = 0; i < 21 && response.statusCode !== 429; i++)
+    response = await app.inject({ method: 'GET', url: '/products', remoteAddress: '192.0.2.99' });
+  expect(response.statusCode).toBe(429);
+  expect(response.json().error.code).toBe('RATE_LIMITED');
+  expect(response.headers['retry-after']).toBeDefined();
 });
 
 afterAll(async () => {
@@ -93,14 +102,37 @@ describe('gateway proxy, correlation & health', () => {
     expect(received['x-forwarded-for']).not.toBe('1.2.3.4'); // spoof ditolak
   });
 
+  it('membuang x-service-token kiriman klien sebelum diteruskan ke service internal', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/products',
+      headers: { 'x-service-token': 'forged-by-a-public-client' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().received['x-service-token']).toBeUndefined();
+  });
+
+  it('route tak dikenal → 404 dengan bentuk error seragam + correlation ID', async () => {
+    const res = await app.inject({ method: 'GET', url: '/tidak-ada' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({
+      error: { message: 'Resource tidak ditemukan', code: 'NOT_FOUND' },
+    });
+    expect(res.headers['x-correlation-id']).toBeTruthy();
+    // Route internal product-service tidak pernah terjangkau lewat gateway.
+    const internal = await app.inject({ method: 'POST', url: '/internal/reservations/x' });
+    expect(internal.statusCode).toBe(404);
+    expect(internal.json().error.code).toBe('NOT_FOUND');
+  });
+
   it('security header (helmet) muncul di response gateway', async () => {
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
   it('header rate-limit aktif di level gateway', async () => {
-    const res = await app.inject({ method: 'GET', url: '/' });
-    expect(res.headers['x-ratelimit-limit']).toBeDefined();
+    const response = await app.inject({ method: 'GET', url: '/products' });
+    expect(response.headers['x-ratelimit-limit']).toBeDefined();
   });
 
   it('aggregated /health → ok saat semua up, degraded saat ada yang down', async () => {
@@ -110,9 +142,25 @@ describe('gateway proxy, correlation & health', () => {
     expect(up.json().services).toMatchObject({ auth: 'up', product: 'up', order: 'up' });
 
     await new Promise<void>((r) => orderDouble.close(() => r()));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     const down = await app.inject({ method: 'GET', url: '/health' });
     expect(down.statusCode).toBe(503);
     expect(down.json().status).toBe('degraded');
     expect(down.json().services.order).toBe('down');
+  });
+
+  it('upstream yang mati → 503 UPSTREAM_UNAVAILABLE (bukan 500 seolah gateway yang bug)', async () => {
+    // orderDouble sudah ditutup oleh tes sebelumnya → connection refused.
+    for (const url of ['/orders', '/cart']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({
+        error: { message: 'Layanan sementara tidak tersedia', code: 'UPSTREAM_UNAVAILABLE' },
+      });
+      expect(res.headers['retry-after']).toBe('5');
+      expect(res.headers['x-correlation-id']).toBeTruthy();
+    }
+    // Service lain yang masih hidup tidak ikut terdampak.
+    expect((await app.inject({ method: 'GET', url: '/products' })).statusCode).toBe(200);
   });
 });

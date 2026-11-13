@@ -1,87 +1,157 @@
 import { useEffect, useState } from 'react';
-import { Header } from '../components/Header';
-import { Footer } from '../components/Footer';
+import { Link } from 'react-router-dom';
+import { api, type Product } from '../api/client';
+import { useCart } from '../context/CartContext';
+import { ShopLayout, Notice, Pagination, rupiah } from '../components/ShopLayout';
 import { HealthWidget } from '../components/HealthWidget';
-import { api, ApiError, type Product } from '../api/client';
-import { useAuth } from '../context/AuthContext';
-
-const rupiah = (n: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n);
 
 export function DashboardPage() {
-  const { token } = useAuth();
+  const { cart, add, busy } = useCart();
   const [products, setProducts] = useState<Product[]>([]);
-  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [q, setQ] = useState('');
+  const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
-
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    const query =
+      q || offset
+        ? new URLSearchParams({ q, offset: String(offset), limit: '20' }).toString()
+        : 'limit=20';
     api
-      .products()
-      .then((r) => setProducts(r.products))
-      .catch((e) => setNotice({ kind: 'err', text: e instanceof ApiError ? e.message : 'Gagal memuat produk' }))
-      .finally(() => setLoading(false));
-  }, []);
-
-  async function order(product: Product) {
+      .products(query)
+      .then((result) => {
+        if (active) {
+          setProducts(result.products);
+          setTotal(result.total ?? result.products.length);
+        }
+      })
+      .catch((err) => {
+        if (active) setNotice({ text: err.message, error: true });
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [q, offset]);
+  async function addProduct(product: Product) {
     setNotice(null);
     try {
-      await api.createOrder([{ productId: product.id, quantity: 1 }], token!);
-      setNotice({ kind: 'ok', text: `Order "${product.name}" berhasil dibuat` });
-    } catch (e) {
-      setNotice({ kind: 'err', text: e instanceof ApiError ? e.message : 'Gagal membuat order' });
+      await add(product.id);
+      setNotice({ text: `${product.name} ditambahkan ke keranjang`, error: false });
+    } catch (err) {
+      setNotice({
+        text: err instanceof Error ? err.message : 'Gagal menambahkan produk',
+        error: true,
+      });
     }
   }
-
   return (
-    <div className="min-h-screen flex flex-col">
-      <Header />
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 grid gap-8 lg:grid-cols-[1fr_320px]">
-        <section>
-          <h1 className="text-2xl font-semibold text-primary mb-1">Katalog Produk</h1>
-          <p className="text-sm text-muted mb-6">
-            Data melewati gateway → product-service. Order melewati order-service (resilient).
+    <ShopLayout>
+      <section className="rounded-2xl bg-primary text-white p-6 sm:p-9 mb-8 flex flex-wrap justify-between items-center gap-5">
+        <div>
+          <p className="text-accent text-xs font-semibold tracking-widest mb-3">INIXINDO STORE</p>
+          <h1 className="text-3xl sm:text-4xl font-semibold leading-tight">
+            Belanja lebih terencana.
+          </h1>
+          <p className="text-blue-100 mt-3 text-sm max-w-xl">
+            Pilih produk, atur keranjang, dan pantau pesanan Anda dalam satu tempat.
           </p>
-
-          {notice && (
-            <p
-              role="status"
-              className={`mb-4 text-sm rounded-lg px-3 py-2 ${
-                notice.kind === 'ok' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
-              }`}
-            >
-              {notice.text}
-            </p>
+        </div>
+        <Link
+          className="rounded-xl bg-white text-primary font-semibold px-5 py-3 text-sm"
+          to="/cart"
+        >
+          Lihat keranjang ({cart?.quantity ?? 0})
+        </Link>
+      </section>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">TEMUKAN PILIHAN ANDA</p>
+          <h2 className="text-2xl font-semibold text-primary">Katalog Produk</h2>
+        </div>
+        <form
+          className="flex gap-2 w-full sm:w-auto"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setQ(draft.trim());
+            setOffset(0);
+          }}
+        >
+          <input
+            className="field"
+            aria-label="Cari produk"
+            placeholder="Cari nama produk..."
+            maxLength={100}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <button className="button-secondary">Cari</button>
+        </form>
+      </div>
+      {notice && (
+        <Notice error={notice.error}>
+          {notice.text}{' '}
+          {!notice.error && (
+            <Link className="underline font-semibold ml-2" to="/cart">
+              Buka keranjang
+            </Link>
           )}
-
-          {loading ? (
-            <p className="text-muted">Memuat…</p>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
-              {products.map((p) => (
-                <article
-                  key={p.id}
-                  className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm flex flex-col"
+        </Notice>
+      )}
+      {loading ? (
+        <p role="status">Memuat produk...</p>
+      ) : !products.length ? (
+        <div className="panel text-center py-12">
+          <p className="font-semibold text-primary">Produk belum ditemukan</p>
+          <p className="text-muted text-sm mt-2">Coba kata pencarian lain.</p>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {products.map((product, index) => (
+            <article key={product.id} className="panel flex flex-col">
+              <div className="rounded-xl h-24 bg-gradient-to-br from-blue-50 to-slate-100 flex items-center justify-between p-5 mb-5">
+                <span className="text-primary/20 text-4xl font-semibold" aria-hidden="true">
+                  {String(offset + index + 1).padStart(2, '0')}
+                </span>
+                <span
+                  className={`text-xs rounded-full px-3 py-1 ${product.stock ? 'bg-white text-success' : 'bg-red-50 text-danger'}`}
                 >
-                  <h3 className="font-semibold text-ink">{p.name}</h3>
-                  <p className="text-secondary font-medium mt-1">{rupiah(p.price)}</p>
-                  <p className="text-xs text-muted mt-1">Stok: {p.stock}</p>
-                  <button
-                    type="button"
-                    onClick={() => order(p)}
-                    className="mt-4 rounded-lg bg-accent hover:bg-secondary text-white text-sm font-medium py-2 transition-colors"
-                  >
-                    Buat Order (1)
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <aside>
+                  {product.stock ? 'Tersedia' : 'Stok habis'}
+                </span>
+              </div>
+              <h3 className="text-lg font-semibold text-primary">{product.name}</h3>
+              <p className="font-semibold text-secondary text-xl mt-3">{rupiah(product.price)}</p>
+              <p className="text-sm text-muted mt-2 mb-5">Stok: {product.stock}</p>
+              <button
+                className="button-primary mt-auto"
+                disabled={
+                  busy ||
+                  !cart ||
+                  product.stock < 1 ||
+                  (cart.items.find((item) => item.productId === product.id)?.quantity ?? 0) >=
+                    Math.min(product.stock, 1000)
+                }
+                onClick={() => void addProduct(product)}
+              >
+                Tambah ke keranjang
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+      {!loading && <Pagination offset={offset} total={total} onChange={setOffset} />}
+      <details className="mt-10">
+        <summary className="text-sm text-muted cursor-pointer">Status layanan</summary>
+        <div className="mt-4 max-w-md">
           <HealthWidget />
-        </aside>
-      </main>
-      <Footer />
-    </div>
+        </div>
+      </details>
+    </ShopLayout>
   );
 }

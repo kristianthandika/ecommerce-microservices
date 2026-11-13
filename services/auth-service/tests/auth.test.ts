@@ -39,7 +39,9 @@ describe('auth-service end-to-end', () => {
   });
 
   it('body tidak valid → 400 dengan detail field (bukan 500)', async () => {
-    const res = await request(app).post('/register').send({ email: 'bukan-email', password: '123' });
+    const res = await request(app)
+      .post('/register')
+      .send({ email: 'bukan-email', password: '123' });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(res.body.error.details.length).toBeGreaterThan(0);
@@ -81,6 +83,7 @@ describe('auth-service end-to-end', () => {
     const decoded = jwt.verify(token, pubKey, {
       algorithms: ['RS256'],
       issuer: 'auth-service',
+      audience: 'ecommerce-api',
     }) as jwt.JwtPayload;
     expect(decoded.email).toBe(creds.email);
   });
@@ -92,5 +95,39 @@ describe('auth-service end-to-end', () => {
     expect(kid2).toBe(kid1);
     expect(existsSync(join(keysDir, 'private.pem'))).toBe(true);
     expect(existsSync(join(keysDir, 'public.pem'))).toBe(true);
+  });
+});
+
+describe('audit regressions', () => {
+  it('normalizes email and permits exactly one concurrent registration', async () => {
+    const email = `race-${Date.now()}@test.local`;
+    const results = await Promise.all([
+      request(app).post('/register').send({ email: email.toUpperCase(), password: 'password111' }),
+      request(app).post('/register').send({ email, password: 'password222' }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+  });
+  it('rejects passwords exceeding 72 UTF-8 bytes, including multibyte characters', async () => {
+    for (const password of ['a'.repeat(73), '\u00e9'.repeat(37)]) {
+      const result = await request(app)
+        .post('/register')
+        .send({ email: 'long@test.local', password });
+      expect(result.status).toBe(400);
+    }
+  });
+  it('maps malformed JSON to 400 and oversized payloads to 413', async () => {
+    expect(
+      (await request(app).post('/login').set('content-type', 'application/json').send('{')).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(app)
+          .post('/login')
+          .send({ value: 'a'.repeat(110000) })
+      ).status,
+    ).toBe(413);
+  });
+  it('health polling never consumes business API rate limits', async () => {
+    for (let i = 0; i < 305; i++) expect((await request(app).get('/health')).status).toBe(200);
   });
 });

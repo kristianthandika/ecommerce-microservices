@@ -17,22 +17,37 @@ async function probe(url: string, correlationId: string): Promise<Status> {
     const res = await fetchWithTimeout(`${url}/health`, {
       headers: { [CORRELATION_ID_HEADER]: correlationId },
     });
-    return res.ok ? 'up' : 'down';
+    const body = (await res.json()) as { status?: string };
+    return res.ok && body.status === 'ok' ? 'up' : 'down';
   } catch {
     return 'down';
   }
 }
 
-export async function aggregatedHealth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const entries = Object.entries(config.services);
-  const results = await Promise.all(entries.map(([, url]) => probe(url, String(request.id))));
-
-  const services: Record<string, Status> = {};
-  entries.forEach(([name], i) => {
-    services[name] = results[i];
-  });
-
-  const allUp = results.every((s) => s === 'up');
+let cached: { services: Record<string, Status>; allUp: boolean; expires: number } | undefined;
+let pending:
+  Promise<{ services: Record<string, Status>; allUp: boolean; expires: number }> | undefined;
+export async function aggregatedHealth(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  if (!cached || cached.expires < Date.now()) {
+    pending ??= (async () => {
+      const entries = Object.entries(config.services);
+      const results = await Promise.all(entries.map(([, url]) => probe(url, String(request.id))));
+      return {
+        services: Object.fromEntries(entries.map(([name], i) => [name, results[i]])),
+        allUp: results.every((status) => status === 'up'),
+        expires: Date.now() + 1000,
+      };
+    })();
+    try {
+      cached = await pending;
+    } finally {
+      pending = undefined;
+    }
+  }
+  const { services, allUp } = cached;
   reply.code(allUp ? 200 : 503).send({
     status: allUp ? 'ok' : 'degraded',
     gateway: 'up',

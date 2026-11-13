@@ -15,10 +15,19 @@ try {
 }
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-  process.on(signal, async () => {
+  process.once(signal, async () => {
     app.log.info({ signal }, 'shutting down gateway');
-    await app.close();
-    await shutdownTracing();
-    process.exit(0);
+    // Batas waktu sama seperti service lain: koneksi yang menggantung tidak boleh
+    // menahan container sampai Docker mengirim SIGKILL.
+    const deadline = setTimeout(() => process.exit(1), 10000);
+    deadline.unref();
+    try {
+      await app.close();
+      await shutdownTracing();
+      process.exit(0);
+    } catch (err) {
+      app.log.error(err, 'gagal shutdown dengan bersih');
+      process.exit(1);
+    }
   });
 }

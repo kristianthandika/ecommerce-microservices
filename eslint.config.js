@@ -5,12 +5,7 @@ import tseslint from 'typescript-eslint';
 /** Flat config dipakai seluruh workspace (ESLint 9 + typescript-eslint). */
 export default tseslint.config(
   {
-    ignores: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '**/coverage/**',
-      'frontend/**', // frontend punya konfigurasi TS/React sendiri
-    ],
+    ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -18,7 +13,7 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
-      globals: { ...globals.node },
+      globals: { ...globals.node, ...globals.browser },
     },
     rules: {
       '@typescript-eslint/no-unused-vars': [

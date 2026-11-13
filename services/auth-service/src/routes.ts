@@ -1,16 +1,73 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { AppError } from './middleware/errors.ts';
 import { validate } from './middleware/validate.ts';
 import { requireAuth } from './middleware/require-auth.ts';
 import { getKeyMaterial } from './keys.ts';
-import { register, login, getUserById } from './users.ts';
+import { register, login, getUserById, accessTokenFor } from './users.ts';
+import { config } from './config.ts';
+import { startSession, rotateSession, endSession, endSessionForMissingUser } from './sessions.ts';
 
 const credentialsSchema = z.object({
-  email: z.string().email('Email tidak valid').max(254, 'Email terlalu panjang'),
+  // Normalisasi dulu (trim + lowercase), baru validasi format — email dengan
+  // spasi di tepi atau huruf kapital tetap diterima sebagai alamat yang sama.
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254, 'Email terlalu panjang')
+    .pipe(z.email('Email tidak valid')),
   // Batas atas mencegah DoS lewat hashing string sangat besar.
-  password: z.string().min(8, 'Password minimal 8 karakter').max(200, 'Password terlalu panjang'),
+  password: z
+    .string()
+    .min(8, 'Password minimal 8 karakter')
+    .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, 'Password maksimal 72 byte UTF-8'),
 });
 type Credentials = z.infer<typeof credentialsSchema>;
+
+const cookieOptions = () => ({
+  httpOnly: true, // tidak terbaca JavaScript → tidak bisa dicuri lewat XSS
+  secure: config.refresh.cookieSecure,
+  sameSite: 'strict' as const, // tidak pernah dikirim dari situs lain (CSRF)
+  path: config.refresh.cookiePath, // hanya dikirim ke endpoint auth, bukan ke API lain
+});
+
+function readRefreshCookie(req: Request): string | undefined {
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === config.refresh.cookieName) {
+      const value = rest.join('=');
+      return /^[A-Za-z0-9_-]{20,100}$/.test(value) ? value : undefined;
+    }
+  }
+  return undefined;
+}
+
+function sendSession(
+  res: Response,
+  session: { token: string; expiresAt: number },
+  body: { token: string; user: unknown },
+): void {
+  res.cookie(config.refresh.cookieName, session.token, {
+    ...cookieOptions(),
+    maxAge: Math.max(0, session.expiresAt - Date.now()),
+  });
+  // Token tidak boleh tersimpan di cache browser/proxy mana pun.
+  res.set('Cache-Control', 'no-store');
+  res.json({ ...body, expiresIn: config.jwt.expiresInSeconds });
+}
+
+/**
+ * Pertahanan CSRF berlapis untuk endpoint yang memakai cookie: SameSite=Strict
+ * (lapis 1), header kustom yang memaksa preflight CORS untuk origin lain (lapis 2),
+ * dan Origin — bila dikirim browser — harus termasuk daftar yang diizinkan (lapis 3).
+ */
+function requireSameSiteRequest(req: Request, _res: Response, next: NextFunction): void {
+  const origin = req.get('origin');
+  if (!req.get('x-requested-with') || (origin && !config.refresh.allowedOrigins.includes(origin)))
+    throw new AppError(403, 'Permintaan lintas situs ditolak', undefined, 'CSRF_REJECTED');
+  next();
+}
 
 export function buildRouter(): Router {
   const router = Router();
@@ -23,6 +80,8 @@ export function buildRouter(): Router {
   // Endpoint JWKS standar — service lain mem-fetch public key dari sini.
   router.get('/.well-known/jwks.json', (_req: Request, res: Response) => {
     const { jwk } = getKeyMaterial();
+    // Public key aman di-cache; konsumen tetap me-refresh sendiri saat menemui `kid` baru.
+    res.set('Cache-Control', 'public, max-age=300');
     res.json({ keys: [jwk] });
   });
 
@@ -34,13 +93,68 @@ export function buildRouter(): Router {
   });
 
   router.post('/login', validate(credentialsSchema), async (req: Request, res: Response) => {
-    const result = await login(req.validated as Credentials);
-    res.json(result);
+    let result: Awaited<ReturnType<typeof login>>;
+    try {
+      result = await login(req.validated as Credentials);
+    } catch (err) {
+      if (err instanceof AppError && err.code === 'LOGIN_THROTTLED')
+        res.set(
+          'Retry-After',
+          String((err.details as { retryAfterSeconds: number }).retryAfterSeconds),
+        );
+      throw err;
+    }
+    sendSession(res, startSession(result.user.id), result);
+  });
+
+  // Tukar refresh token (cookie HttpOnly) dengan access token baru + refresh token baru.
+  router.post('/refresh', requireSameSiteRequest, (req: Request, res: Response) => {
+    const presented = readRefreshCookie(req);
+    try {
+      if (!presented)
+        throw new AppError(
+          401,
+          'Sesi berakhir. Silakan masuk kembali.',
+          undefined,
+          'INVALID_REFRESH',
+        );
+      const rotation = rotateSession(presented);
+      if (rotation.kind === 'reused') {
+        req.log?.warn({ userId: rotation.userId }, 'refresh token dipakai ulang — sesi dicabut');
+        throw new AppError(
+          401,
+          'Sesi dicabut demi keamanan. Silakan masuk kembali.',
+          undefined,
+          'REFRESH_REUSED',
+        );
+      }
+      let access: ReturnType<typeof accessTokenFor>;
+      try {
+        access = accessTokenFor(rotation.userId);
+      } catch (err) {
+        endSessionForMissingUser(rotation.token);
+        throw err;
+      }
+      sendSession(res, rotation, access);
+    } catch (err) {
+      // Cookie yang tidak lagi berlaku dihapus; REFRESH_RACE tidak, cookie baru sudah terpasang.
+      if (err instanceof AppError && err.status === 401)
+        res.clearCookie(config.refresh.cookieName, cookieOptions());
+      throw err;
+    }
+  });
+
+  router.post('/logout', requireSameSiteRequest, (req: Request, res: Response) => {
+    const presented = readRefreshCookie(req);
+    if (presented) endSession(presented);
+    res.clearCookie(config.refresh.cookieName, cookieOptions());
+    res.status(204).end();
   });
 
   // Route terproteksi contoh — butuh token valid.
   router.get('/me', requireAuth, (req: Request, res: Response) => {
     const user = getUserById(String(req.user?.sub));
+    if (!user) throw new AppError(401, 'Sesi tidak berlaku', undefined, 'INVALID_SESSION');
     res.json({ user });
   });
 

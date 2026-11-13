@@ -34,10 +34,28 @@ export function errorHandler(
   err: unknown,
   req: Request,
   res: Response,
-   
+
   _next: NextFunction,
 ): void {
-  req.log?.error({ err }, 'request gagal');
+  const parserError = err as { type?: string };
+  const parserStatus =
+    parserError?.type === 'entity.parse.failed'
+      ? 400
+      : parserError?.type === 'entity.too.large'
+        ? 413
+        : undefined;
+  if (parserStatus) {
+    res.status(parserStatus).json({
+      error: {
+        message: parserStatus === 400 ? 'JSON tidak valid' : 'Payload terlalu besar',
+        code: parserStatus === 400 ? 'INVALID_JSON' : 'PAYLOAD_TOO_LARGE',
+      },
+    });
+    return;
+  }
+  req.log?.[
+    (err instanceof AppError && err.status < 500) || err instanceof ZodError ? 'warn' : 'error'
+  ]({ err }, 'request gagal');
 
   if (err instanceof ZodError) {
     res.status(400).json({

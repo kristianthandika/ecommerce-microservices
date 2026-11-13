@@ -10,3 +10,8 @@
 services/auth-service/keys
 **/loadtest-*.txt
 **/loadtest-*.json
+
+.e2e
+**/data
+**/*.sqlite*
+.env.*

@@ -1,143 +1,158 @@
 name: ecommerce-microservices
-
-# Semua service backend HANYA di network internal. Hanya gateway & frontend
-# yang expose port ke host. URL antar-service di-override ke hostname internal
-# Docker (Konvensi Konfigurasi Antar-Service).
-
-x-healthcheck-defaults: &healthcheck-defaults
+x-health: &health
   interval: 5s
   timeout: 3s
-  retries: 5
-  start_period: 8s
-
+  retries: 10
+  start_period: 15s
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  mem_limit: 512m
+  cpus: 1.0
+  pids_limit: 128
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  # Root filesystem read-only: kode di image tidak bisa diubah saat runtime.
+  # Yang boleh ditulis hanya volume data/keys dan tmpfs /tmp.
+  read_only: true
+  tmpfs: ['/tmp:mode=1777,size=64m']
+  networks: [backend]
 services:
   auth-service:
+    <<: *runtime
     build:
       context: .
       dockerfile: services/auth-service/Dockerfile
     environment:
-      - PORT=3001
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - CORS_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:3000}
-      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-admin@inixindo.local}
-      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-admin123}
-    volumes:
-      - auth-keys:/app/services/auth-service/keys # persist RSA keypair (m1.3)
+      PORT: 3001
+      DATA_DIR: /app/data
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_ISSUER: ${JWT_ISSUER:-auth-service}
+      SEED_ADMIN_ENABLED: ${SEED_ADMIN_ENABLED:-false}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      # Origin browser yang boleh memakai cookie refresh (pertahanan CSRF lapis 3).
+      REFRESH_ALLOWED_ORIGINS: ${FRONTEND_ORIGIN:-http://localhost:3000},http://127.0.0.1:3000
+    volumes: [auth-keys:/app/services/auth-service/keys, auth-data:/app/data]
     healthcheck:
+      <<: *health
       test:
         [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://localhost:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      <<: *healthcheck-defaults
-    networks: [internal]
-
   product-service:
+    <<: *runtime
     build:
       context: .
       dockerfile: services/product-service/Dockerfile
     environment:
-      - PORT=3002
-      - AUTH_SERVICE_URL=http://auth-service:3001
-      - CORS_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:3000}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      PORT: 3002
+      DATA_DIR: /app/data
+      AUTH_SERVICE_URL: http://auth-service:3001
+      JWT_ISSUER: ${JWT_ISSUER:-auth-service}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes: [product-data:/app/data]
     depends_on:
-      auth-service:
-        condition: service_healthy
+      auth-service: { condition: service_healthy }
     healthcheck:
+      <<: *health
       test:
         [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://localhost:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      <<: *healthcheck-defaults
-    networks: [internal]
-
   order-service:
+    <<: *runtime
     build:
       context: .
       dockerfile: services/order-service/Dockerfile
     environment:
-      - PORT=3003
-      - AUTH_SERVICE_URL=http://auth-service:3001
-      - PRODUCT_SERVICE_URL=http://product-service:3002
-      - CORS_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:3000}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      PORT: 3003
+      DATA_DIR: /app/data
+      AUTH_SERVICE_URL: http://auth-service:3001
+      PRODUCT_SERVICE_URL: http://product-service:3002
+      JWT_ISSUER: ${JWT_ISSUER:-auth-service}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes: [order-data:/app/data]
     depends_on:
-      auth-service:
-        condition: service_healthy
-      product-service:
-        condition: service_healthy
+      auth-service: { condition: service_healthy }
+      product-service: { condition: service_healthy }
     healthcheck:
+      <<: *health
       test:
         [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://localhost:3003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      <<: *healthcheck-defaults
-    networks: [internal]
-
   gateway:
+    <<: *runtime
     build:
       context: .
       dockerfile: services/gateway/Dockerfile
     environment:
-      - PORT=8080
-      - AUTH_SERVICE_URL=http://auth-service:3001
-      - PRODUCT_SERVICE_URL=http://product-service:3002
-      - ORDER_SERVICE_URL=http://order-service:3003
-      - CORS_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:3000}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      PORT: 8080
+      AUTH_SERVICE_URL: http://auth-service:3001
+      PRODUCT_SERVICE_URL: http://product-service:3002
+      ORDER_SERVICE_URL: http://order-service:3003
+      CORS_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      TRUSTED_PROXY_CIDR: 10.241.17.10/32,10.241.18.10/32
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
-      auth-service:
-        condition: service_healthy
-      product-service:
-        condition: service_healthy
-      order-service:
-        condition: service_healthy
+      auth-service: { condition: service_healthy }
+      product-service: { condition: service_healthy }
+      order-service: { condition: service_healthy }
+    networks: [backend, edge]
+    ports: ['127.0.0.1:8080:8080']
     healthcheck:
-      # Liveness gateway sendiri (GET /), BUKAN /health agregat (yang 503 kalau
-      # ada downstream down) supaya status gateway mencerminkan gateway saja.
+      <<: *health
       test:
         [
-          'CMD',
-          'node',
-          '-e',
-          "fetch('http://localhost:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      <<: *healthcheck-defaults
-    ports:
-      - '8080:8080'
-    networks: [internal]
-
   frontend:
+    <<: *runtime
+    # nginx menulis file sementara proxy/body di /var/cache/nginx.
+    tmpfs: ['/tmp:mode=1777,size=64m', '/var/cache/nginx:mode=1777,size=64m']
+    networks:
+      backend:
+        ipv4_address: 10.241.17.10
+      edge:
+        ipv4_address: 10.241.18.10
     build:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        # URL yang diakses BROWSER user (host), bukan alamat internal Docker.
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        VITE_API_BASE_URL: /api
     depends_on:
-      gateway:
-        condition: service_healthy
+      gateway: { condition: service_healthy }
+    ports: ['127.0.0.1:3000:8080']
     healthcheck:
-      # 127.0.0.1 (bukan localhost) — nginx listen IPv4; BusyBox wget ke
-      # localhost bisa mencoba ::1 (IPv6) → connection refused.
-      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:80/']
-      <<: *healthcheck-defaults
-    ports:
-      - '3000:80'
-    networks: [internal]
-
+      <<: *health
+      test: [CMD, wget, -qO-, 'http://127.0.0.1:8080/']
 volumes:
   auth-keys:
-
+  auth-data:
+  product-data:
+  order-data:
 networks:
-  internal:
-    driver: bridge
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.241.17.0/24
+  edge:
+    ipam:
+      config:
+        - subnet: 10.241.18.0/24

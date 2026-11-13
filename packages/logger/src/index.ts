@@ -32,6 +32,8 @@ export function createLogger(name: string): Logger {
       paths: [
         'req.headers.authorization',
         'req.headers.cookie',
+        'req.headers["x-service-token"]',
+        'res.headers["set-cookie"]',
         'password',
         '*.password',
         'req.body.password',
@@ -67,7 +69,8 @@ export function createHttpLogger(logger: Logger): HttpLogger {
     logger,
     genReqId(req: IncomingMessage, res: ServerResponse) {
       const existing = req.headers[CORRELATION_ID_HEADER];
-      const id = (Array.isArray(existing) ? existing[0] : existing) || randomUUID();
+      const candidate = Array.isArray(existing) ? existing[0] : existing;
+      const id = candidate && /^[A-Za-z0-9_-]{1,128}$/.test(candidate) ? candidate : randomUUID();
       // Pantulkan balik ke response supaya klien/gateway bisa melihatnya.
       res.setHeader(CORRELATION_ID_HEADER, id);
       return id;

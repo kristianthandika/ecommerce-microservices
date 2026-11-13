@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "node --watch src/index.ts",
+    "dev": "node --env-file-if-exists=../../.env --watch src/index.ts",
     "start": "node src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -13,13 +13,14 @@
   "dependencies": {
     "@ecommerce/logger": "*",
     "@ecommerce/resilient-http-client": "*",
+    "@ecommerce/storage": "*",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^3.1.0",
-    "zod": "^3.24.1"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
