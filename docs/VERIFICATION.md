@@ -88,6 +88,8 @@ Belum dijalankan: pemindaian DAST (HawkScan), karena CLI `hawk` dan kredensial S
 
 Mutation test: tujuh penjaga dirusak satu per satu dan setiap kali tes yang menjaganya gagal (tertangkap): pemeriksaan batas tahan dihapus, cursor memakai `<=`, indeks riwayat dihapus, endpoint pembatalan tidak didokumentasikan, alias lama tanpa header `Deprecation`, constraint stok negatif dihapus, dan migrasi tak dikenal diterima.
 
+Branch latihan m12.1–m12.6: di setiap `starter/m12.x` typecheck dan lint lulus, dan yang gagal hanya tes fitur yang dicabut (m12.1: 3, m12.2: 6 + 3, m12.3: 5, m12.4: 3, m12.5: 3, m12.6: 4 + 1). Setiap `solution/m12.x` lulus seluruh tes workspace terkait dan isinya identik dengan `feature/materi-lanjutan`.
+
 Bug yang ditemukan saat verifikasi browser dan diperbaiki: widget health memanggil `/api/v1/health`, yang belum ada. Gateway kini juga melayani health di `/v1`, dan E2E kontrak memeriksanya.
 
 Belum dijalankan: linter OpenAPI eksternal (`npx @redocly/cli lint`), karena mengunduh paket dari luar tidak diizinkan di sesi ini. Pemeriksaan struktural (semua `$ref` ter-resolve, parameter path lengkap, `operationId` unik) ada di `versioning.test.ts`. DAST (HawkScan) juga belum dijalankan.
