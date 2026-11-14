@@ -37,13 +37,6 @@ $labRun = [guid]::NewGuid().ToString('N').Substring(0, 8)
 $labEmail = "peserta-$labRun@example.test"
 $labPassword = 'Latihan-Only-2026!'
 
-$labCredentials = @{ email = $labEmail; password = $labPassword } | ConvertTo-Json
-$null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
-  -ContentType 'application/json' -Body $labCredentials
-$buyerSession = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/login" `
-  -ContentType 'application/json' -Body $labCredentials
-$buyerHeaders = @{ Authorization = "Bearer $($buyerSession.token)" }
-
 # Ganti username di bawah jika admin bootstrap memakai email berbeda.
 $adminCredential = Get-Credential -UserName 'admin@inixindo.local' `
   -Message 'Masukkan password admin lokal; jangan tempelkan ke laporan'
@@ -55,6 +48,31 @@ $adminSession = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/login" `
   -ContentType 'application/json' -Body $adminBody
 $adminHeaders = @{ Authorization = "Bearer $($adminSession.token)" }
 if ($adminSession.user.role -ne 'admin') { throw 'Akun ini bukan admin' }
+
+# Akun baru baru bisa masuk setelah tautan di email dibuka DAN password-nya dimasukkan.
+# Di kelas, email "dikirim" ke kotak surat pelatihan yang hanya terbaca admin.
+function Confirm-LabAccount([string]$Email, [string]$Password) {
+  $token = $null
+  foreach ($try in 1..10) {
+    $mail = (Invoke-RestMethod -Headers $adminHeaders `
+      -Uri "$apiBase/auth/admin/outbox?to=$([uri]::EscapeDataString($Email))").messages |
+      Where-Object { $_.link -like '*/verify-email#token=*' } | Select-Object -First 1
+    if ($mail) { $token = ($mail.link -split '#token=')[1]; break }
+    Start-Sleep -Milliseconds 300
+  }
+  if (-not $token) { throw "Email verifikasi untuk $Email belum ada" }
+  $body = @{ token = $token; password = $Password } | ConvertTo-Json
+  $null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/verify-email" `
+    -ContentType 'application/json' -Body $body
+}
+
+$labCredentials = @{ email = $labEmail; password = $labPassword } | ConvertTo-Json
+$null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
+  -ContentType 'application/json' -Body $labCredentials
+Confirm-LabAccount $labEmail $labPassword
+$buyerSession = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/login" `
+  -ContentType 'application/json' -Body $labCredentials
+$buyerHeaders = @{ Authorization = "Bearer $($buyerSession.token)" }
 ```
 
 Password contoh hanya untuk akun peserta disposable. Jangan menampilkannya sebagai kredensial admin default. Jangan mencetak variabel sesi karena memuat JWT. Login pada browser menggunakan akun peserta yang sama jika ingin mengamati perubahan dari CLI.

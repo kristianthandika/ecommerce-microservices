@@ -16,7 +16,11 @@ interface AuthState {
   /** False until the initial session restore (refresh cookie) has finished. */
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  /**
+   * Resolves with `verificationRequired: true` when the account has to be activated
+   * through the mailed link first; nobody is signed in then.
+   */
+  register: (email: string, password: string) => Promise<{ verificationRequired: boolean }>;
   logout: () => Promise<void>;
   /** New access token from the refresh cookie, e.g. after the email was verified. */
   refresh: () => Promise<void>;
@@ -128,11 +132,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       async register(email, password) {
         if (signingOut.current) await signingOut.current;
+        const { verificationRequired } = await api.register(email, password);
+        if (verificationRequired) return { verificationRequired };
+        // Verifikasi dimatikan (pengembangan lokal): akun langsung bisa dipakai.
         const current = ++generation.current;
-        await api.register(email, password);
-        // Setelah register, langsung login supaya alur mulus.
         const next = await api.login(email, password);
         if (current === generation.current) setSession(next);
+        return { verificationRequired };
       },
       logout() {
         if (signingOut.current) return signingOut.current;

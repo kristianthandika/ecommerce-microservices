@@ -18,6 +18,8 @@ import { z } from 'zod';
 import {
   credentialsSchema,
   verifyEmailSchema,
+  passwordResetRequestSchema,
+  passwordResetConfirmSchema,
   outboxQuerySchema,
 } from '../services/auth-service/src/schemas.ts';
 import { productSchema, productUpdateSchema } from '../services/product-service/src/schemas.ts';
@@ -171,7 +173,11 @@ export const responses = {
   Jwks,
   UserEnvelope: z.object({ user: User }),
   Outbox: z.object({ messages: z.array(OutboxMessage) }),
-  Accepted: z.object({ sent: z.literal(true) }),
+  Accepted: z.object({ status: z.literal('accepted') }),
+  RegistrationAccepted: z.object({
+    status: z.literal('accepted'),
+    verificationRequired: z.boolean(),
+  }),
   Liveness: z.object({ service: z.string(), status: z.literal('ok') }),
   ProductEnvelope: z.object({ product: Product }),
   CartEnvelope: z.object({ cart: Cart }),
@@ -186,6 +192,8 @@ const requests = {
       'sepenuhnya oleh minLength/format JSON Schema.',
   }),
   VerifyEmailInput: verifyEmailSchema,
+  PasswordResetRequest: passwordResetRequestSchema,
+  PasswordResetConfirm: passwordResetConfirmSchema,
   ProductInput: productSchema,
   ProductUpdate: productUpdateSchema.meta({
     description:
@@ -285,12 +293,19 @@ const operations = {
       operationId: 'register',
       tags: ['auth'],
       summary: 'Daftar akun pembeli (role selalu user)',
+      description:
+        'Jawabannya sama untuk alamat baru, alamat yang menunggu verifikasi, dan alamat yang ' +
+        'sudah punya akun, supaya pendaftaran tidak bisa dipakai menebak siapa yang terdaftar. ' +
+        'Hasilnya hanya sampai lewat email: tautan verifikasi, atau pemberitahuan kepada pemilik ' +
+        'akun yang sudah ada. Akun baru belum bisa masuk sebelum diverifikasi; mendaftar ulang ' +
+        'mengganti password akun yang belum diverifikasi. Paling banyak satu email per menit per alamat.',
       requestBody: body('Credentials'),
       responses: {
-        201: json('UserEnvelope', {
-          description: 'Akun dibuat; tautan verifikasi dikirim ke email (emailVerified: false)',
+        202: json('RegistrationAccepted', {
+          description:
+            'Diterima. verificationRequired menyatakan konfigurasi server, bukan status alamat ini.',
         }),
-        ...errors(400, 409, 429),
+        ...errors(400, 429),
       },
     },
   },
@@ -298,25 +313,49 @@ const operations = {
     post: {
       operationId: 'verifyEmail',
       tags: ['auth'],
-      summary: 'Tukar token dari email verifikasi (sekali pakai, 24 jam)',
+      summary: 'Aktifkan akun dengan token dari email DAN password akun',
       description:
-        'Access token yang sudah terbit tetap berisi email_verified: false sampai sesi di-refresh.',
+        'Token sekali pakai, berlaku 24 jam. Password wajib: tautan saja tidak mengaktifkan akun, ' +
+        'sehingga pemilik kotak surat tidak bisa mengaktifkan pendaftaran orang lain. Lima password ' +
+        'salah membuat tautan tidak berlaku. Setelah berhasil, masuk lewat /auth/login.',
       requestBody: body('VerifyEmailInput'),
       responses: {
-        200: json('UserEnvelope', { description: 'Email terverifikasi' }),
+        200: json('UserEnvelope', {
+          description: 'Email terverifikasi; cookie device_id dipasang',
+        }),
+        ...errors(400, 401, 429),
+      },
+    },
+  },
+  '/auth/password-reset': {
+    post: {
+      operationId: 'requestPasswordReset',
+      tags: ['auth'],
+      summary: 'Minta tautan atur ulang password',
+      description:
+        'Jawabannya sama untuk alamat mana pun. Tautan (berlaku 1 jam, sekali pakai) hanya ' +
+        'dikirim bila alamat itu punya akun, paling banyak satu per menit.',
+      requestBody: body('PasswordResetRequest'),
+      responses: {
+        202: json('Accepted', { description: 'Diterima' }),
         ...errors(400, 429),
       },
     },
   },
-  '/auth/email-verification': {
+  '/auth/password-reset/confirm': {
     post: {
-      operationId: 'resendVerification',
+      operationId: 'confirmPasswordReset',
       tags: ['auth'],
-      summary: 'Kirim ulang email verifikasi untuk pengguna yang login (maks. 1 per menit)',
-      security: bearer,
+      summary: 'Pasang password baru dengan token dari email',
+      description:
+        'Semua sesi akun berakhir dan perangkat yang dikenal dilupakan. Karena tautan membuktikan ' +
+        'penguasaan kotak surat, akun sekaligus terverifikasi. Setelah berhasil, masuk lewat /auth/login.',
+      requestBody: body('PasswordResetConfirm'),
       responses: {
-        202: json('Accepted', { description: 'Email dikirim' }),
-        ...errors(401, 409, 429),
+        200: json('UserEnvelope', {
+          description: 'Password diganti; cookie device_id dipasang',
+        }),
+        ...errors(400, 429),
       },
     },
   },
@@ -343,7 +382,8 @@ const operations = {
           description: 'Masuk berhasil',
           headers: {
             'Set-Cookie': {
-              description: 'refresh_token; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth',
+              description:
+                'refresh_token dan device_id; HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth',
               schema: { type: 'string' },
             },
           },
@@ -687,7 +727,7 @@ const errorDescriptions = {
   401: 'Token tidak ada, kedaluwarsa, atau sesinya sudah dicabut (SESSION_REVOKED)',
   403: 'Role tidak cukup, email belum diverifikasi (EMAIL_NOT_VERIFIED), atau CSRF_REJECTED',
   404: 'Tidak ditemukan atau bukan milik pemanggil',
-  409: 'Konflik bisnis: stok, idempotensi, status, HOLD_LIMIT_EXCEEDED, REFRESH_RACE, EMAIL_ALREADY_VERIFIED',
+  409: 'Konflik bisnis: stok, idempotensi, status, HOLD_LIMIT_EXCEEDED, REFRESH_RACE',
   412: 'If-Match tidak cocok dengan versi keranjang (CART_CHANGED)',
   413: 'Body request melebihi batas ukuran',
   428: 'If-Match wajib dikirim (PRECONDITION_REQUIRED)',

@@ -17,6 +17,11 @@ import { AppError } from './middleware/errors.ts';
  * fetch this short list every few seconds (GET /internal/revocations) and refuse
  * tokens whose `sid` is on it. Logout therefore takes effect within seconds instead
  * of at token expiry, without a call to auth-service on every request.
+ *
+ * Every family remembers until when its newest access token is valid (`accessUntil`),
+ * so the list only holds sessions that could still be used: a session that has been
+ * idle for longer than one access-token lifetime is revoked without an entry. That
+ * keeps the list short even when one account ends many sessions at once.
  */
 interface RefreshRecord {
   userId: string;
@@ -28,8 +33,10 @@ interface RefreshFamily {
   userId: string;
   createdAt: number;
   expiresAt: number; // absolute limit, never extended by rotation
+  /** Expiry of the newest access token issued for this session (absent on old records). */
+  accessUntil?: number;
   revokedAt?: number;
-  revokedReason?: 'logout' | 'reuse' | 'user-missing';
+  revokedReason?: 'logout' | 'reuse' | 'user-missing' | 'password-reset';
 }
 interface LoginFailures {
   count: number;
@@ -48,7 +55,8 @@ export interface RevokedSession {
 const revoked = database.store<RevokedSession>('revoked_sessions');
 /** Verifiers tolerate small clock differences; keep entries a little longer. */
 const CLOCK_SKEW_MS = 60_000;
-// Cover tokens issued before an operator reduced JWT_EXPIRES_IN_SECONDS.
+// Longest configurable access-token lifetime: the bound for sessions whose newest
+// access token is unknown (records written before `accessUntil` existed).
 const MAX_ACCESS_TOKEN_MS = 3_600_000;
 
 const hash = (token: string) => createHash('sha256').update(token).digest('base64url');
@@ -60,6 +68,11 @@ function mint(userId: string, familyId: string, now: number) {
   const token = randomBytes(32).toString('base64url');
   const expiresAt = Math.min(now + config.refresh.ttlMs, family.expiresAt);
   tokens.insert(hash(token), { userId, familyId, expiresAt }, expiresAt);
+  // The caller issues an access token together with this refresh token.
+  families.set(familyId, {
+    ...family,
+    accessUntil: Math.min(now + config.jwt.expiresInSeconds * 1000, expiresAt),
+  });
   return { token, expiresAt };
 }
 
@@ -73,17 +86,23 @@ export function startSession(userId: string, now = Date.now()) {
   });
 }
 
+/**
+ * `accessExpiresAt` is the expiry of a signed access token the caller verified; it
+ * stands in when the family record is gone (swept) or predates `accessUntil`.
+ */
 function revokeFamily(
   familyId: string,
   reason: RefreshFamily['revokedReason'],
   now: number,
-  signedAccessToken = false,
+  accessExpiresAt?: number,
 ) {
   const family = families.get(familyId);
-  if ((!family && !signedAccessToken) || family?.revokedAt) return;
+  if ((!family && accessExpiresAt === undefined) || family?.revokedAt) return;
   if (family) families.set(familyId, { ...family, revokedAt: now, revokedReason: reason });
-  const until = now + MAX_ACCESS_TOKEN_MS + CLOCK_SKEW_MS;
-  revoked.set(familyId, { sid: familyId, until }, until);
+  const lastAccess = family?.accessUntil ?? accessExpiresAt ?? now + MAX_ACCESS_TOKEN_MS;
+  const until = Math.min(lastAccess, now + MAX_ACCESS_TOKEN_MS) + CLOCK_SKEW_MS;
+  // No access token of this session can still be valid: nothing to publish.
+  if (until > now) revoked.set(familyId, { sid: familyId, until }, until);
 }
 
 /** True while access tokens of this session must be refused. */
@@ -92,7 +111,7 @@ export function isSessionRevoked(sid: string, now = Date.now()): boolean {
   return entry !== undefined && entry.until > now;
 }
 
-/** The revocation list other services poll. Short by construction: entries live at most 61 minutes, covering supported token TTLs. */
+/** The revocation list other services poll. Short by construction: an entry lives one access-token lifetime plus a minute. */
 export function listRevokedSessions(now = Date.now()): RevokedSession[] {
   return revoked.values().filter((entry) => entry.until > now);
 }
@@ -142,9 +161,32 @@ export function endSession(token: string, now = Date.now()): void {
   });
 }
 
-/** Only call after verifying a signed, unexpired JWT; the cookie may have disappeared. */
-export function endAccessSession(sid: string, now = Date.now()): void {
-  database.transaction(() => revokeFamily(sid, 'logout', now, true));
+/**
+ * Only call after verifying a signed, unexpired JWT (`exp` in seconds is its expiry);
+ * the cookie may have disappeared.
+ */
+export function endAccessSession(sid: string, exp: number, now = Date.now()): void {
+  database.transaction(() => revokeFamily(sid, 'logout', now, exp * 1000));
+}
+
+/**
+ * Ends every session of an account, e.g. after its password was reset. Runs inside
+ * the caller's transaction, so it commits together with the change that caused it.
+ */
+export function endAllSessions(
+  userId: string,
+  reason: RefreshFamily['revokedReason'],
+  now = Date.now(),
+): number {
+  const rows = database
+    .statement(
+      "SELECT key FROM records WHERE namespace='refresh_families' AND json_extract(value, '$.userId')=?",
+    )
+    .all(userId);
+  database.transaction(() => {
+    for (const row of rows) revokeFamily(String(row.key), reason, now);
+  });
+  return rows.length;
 }
 
 /** Called when a refresh points at a user that no longer exists. */

@@ -109,20 +109,25 @@ try {
     });
     assert.equal(result.status, 200);
     admin = result.data.token;
-    for (const account of [email, `other-${email}`])
+    // Accounts become usable only after their address was confirmed with the mailed link
+    // and their password (training mailbox). Mail leaves after the HTTP response.
+    for (const account of [email, `other-${email}`]) {
       assert.equal(
         (await api('/auth/register', { method: 'POST', body: { email: account, password } }))
           .status,
-        201,
+        202,
       );
-    // New accounts may order only after confirming their address (training mailbox).
-    for (const account of [email, `other-${email}`]) {
-      const mailbox = await api(`/auth/admin/outbox?to=${encodeURIComponent(account)}`, {
-        token: admin,
-      });
-      const token = mailbox.data.messages[0].link.split('#token=')[1];
+      let link;
+      for (let attempt = 0; attempt < 20 && !link; attempt++) {
+        const mailbox = await api(`/auth/admin/outbox?to=${encodeURIComponent(account)}`, {
+          token: admin,
+        });
+        link = mailbox.data.messages.find((message) => message.link?.includes('/verify-email#'));
+        if (!link) await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const token = link.link.split('#token=')[1];
       assert.equal(
-        (await api('/auth/verify-email', { method: 'POST', body: { token } })).status,
+        (await api('/auth/verify-email', { method: 'POST', body: { token, password } })).status,
         200,
       );
     }

@@ -31,7 +31,10 @@ Link: </api/v1/products>; rel="successor-version"
 | ------ | ------------------------------- | --------------- | --------: | ----------------------------------------------- |
 | GET    | `/health`                       | Publik          | 200 / 503 | Status agregat; 503 berarti degraded            |
 | GET    | `/openapi.json`                 | Publik          |       200 | Spesifikasi OpenAPI 3.1 API ini                 |
-| POST   | `/auth/register`                | Publik          |       201 | Role hasil register selalu user                 |
+| POST   | `/auth/register`                | Publik          |       202 | Jawaban sama untuk alamat mana pun; role user   |
+| POST   | `/auth/verify-email`            | Publik          |       200 | Token dari email + password akun                |
+| POST   | `/auth/password-reset`          | Publik          |       202 | Jawaban sama; tautan hanya bila ada akunnya     |
+| POST   | `/auth/password-reset/confirm`  | Publik          |       200 | Password baru; semua sesi akun berakhir         |
 | POST   | `/auth/login`                   | Publik          |       200 | Access token + cookie refresh HttpOnly          |
 | POST   | `/auth/refresh`                 | Cookie + header |       200 | Rotasi refresh token, access token baru         |
 | POST   | `/auth/logout`                  | Cookie + header |       204 | Mencabut sesi refresh di server                 |

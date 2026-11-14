@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -43,8 +43,9 @@ describe('webhook mail transport', () => {
     const registered = await request(app)
       .post('/register')
       .send({ email: 'hook@test.local', password: 'correct-horse-battery' });
-    expect(registered.status).toBe(201);
-    expect(received).toHaveLength(1);
+    expect(registered.status).toBe(202);
+    // Mail leaves after the response, so that its timing says nothing about the address.
+    await vi.waitFor(() => expect(received).toHaveLength(1));
     expect(received[0].authorization).toBe('Bearer webhook-secret');
     expect(Object.keys(received[0].body).sort()).toEqual(['subject', 'text', 'to']);
     expect(received[0].body.to).toBe('hook@test.local');
@@ -53,12 +54,13 @@ describe('webhook mail transport', () => {
     expect((await request(app).get('/admin/outbox')).status).toBe(404);
   });
 
-  it('still creates the account when the relay fails; the user can ask again later', async () => {
+  it('answers the same when the relay fails; registering again later sends a new link', async () => {
     relayStatus = 500;
     const registered = await request(app)
       .post('/register')
       .send({ email: 'unlucky@test.local', password: 'correct-horse-battery' });
-    expect(registered.status).toBe(201);
-    expect(registered.body.user.emailVerified).toBe(false);
+    expect(registered.status).toBe(202);
+    expect(registered.body).toEqual({ status: 'accepted', verificationRequired: true });
+    await vi.waitFor(() => expect(received).toHaveLength(2));
   });
 });

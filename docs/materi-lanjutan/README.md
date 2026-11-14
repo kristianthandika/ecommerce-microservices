@@ -6,7 +6,7 @@ Paket ini mendokumentasikan seluruh penambahan setelah prototype awal: penguatan
 
 ## Isi dan urutan pemakaian
 
-**Pembaruan keamanan 14 November 2026:** baca [penutupan celah keamanan](08-penutupan-celah-keamanan.md) sebelum praktikum. Akun baru dan akun biasa lama yang belum diverifikasi harus memverifikasi email sebelum checkout; kotak surat lokal tersedia bagi admin. Bab ini juga menjelaskan pencabutan JWT dan dampak gangguan auth-service.
+**Pembaruan keamanan 14 November 2026:** baca [penutupan celah keamanan](08-penutupan-celah-keamanan.md) sebelum praktikum. Akun baru dan akun biasa lama yang belum diverifikasi harus memverifikasi email (tautan dan password) sebelum bisa masuk; kotak surat lokal tersedia bagi admin. Pendaftaran dan lupa password selalu menjawab sama untuk alamat mana pun. Bab ini juga menjelaskan pencabutan JWT dan dampak gangguan auth-service.
 
 | Berkas                                                           | Pembaca dan kegunaan                                                                         |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |

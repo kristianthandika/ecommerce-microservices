@@ -42,7 +42,7 @@ export function CheckoutPage() {
     try {
       const { order } = await api.checkout(cart.version, address, attempt.current.key, token);
       await reload().catch(() => {});
-      navigate(`/orders/${order.id}`, { replace: true });
+      void navigate(`/orders/${order.id}`, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Checkout gagal');
       setAmbiguous(!(err instanceof ApiError) || err.status === 0 || err.status >= 500);

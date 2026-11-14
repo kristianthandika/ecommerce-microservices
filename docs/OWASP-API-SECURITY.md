@@ -6,18 +6,18 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 
 ## Ringkasan
 
-| Risiko                                               | Status    | Kontrol utama                                                                 |
-| ---------------------------------------------------- | --------- | ----------------------------------------------------------------------------- |
-| API1 Broken Object Level Authorization               | Terpenuhi | Kepemilikan dari klaim `sub` JWT; order orang lain dijawab 404                |
-| API2 Broken Authentication                           | Sebagian  | RS256 + JWKS, access token 15 menit, refresh token berotasi, backoff per akun |
-| API3 Broken Object Property Level Authorization      | Terpenuhi | Skema zod membuang field tak dikenal; respons dipetakan ke bentuk publik      |
-| API4 Unrestricted Resource Consumption               | Terpenuhi | Rate limit berlapis, batas body/halaman/offset, query SQL berindeks, timeout  |
-| API5 Broken Function Level Authorization             | Terpenuhi | `requireRole`/`requireAdmin` di server; route internal butuh service token    |
-| API6 Unrestricted Access to Sensitive Business Flows | Sebagian  | Idempotensi, stok atomik, kuota per akun, verifikasi email sebelum pemesanan  |
-| API7 Server Side Request Forgery                     | Terpenuhi | Tidak ada URL dari pengguna; ID divalidasi UUID dan di-encode                 |
-| API8 Security Misconfiguration                       | Terpenuhi | Header keamanan, CORS allowlist, error generik, container non-root read-only  |
-| API9 Improper Inventory Management                   | Terpenuhi | OpenAPI 3.1 dari skema zod, `/api/v1`, alias lama dengan Deprecation/Sunset   |
-| API10 Unsafe Consumption of APIs                     | Terpenuhi | Respons upstream divalidasi skema dan aritmetikanya diperiksa ulang           |
+| Risiko                                               | Status    | Kontrol utama                                                                                                                         |
+| ---------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| API1 Broken Object Level Authorization               | Terpenuhi | Kepemilikan dari klaim `sub` JWT; order orang lain dijawab 404                                                                        |
+| API2 Broken Authentication                           | Sebagian  | RS256 + JWKS, access token 15 menit, refresh token berotasi, backoff per akun + device cookie, pendaftaran/reset tanpa penebakan akun |
+| API3 Broken Object Property Level Authorization      | Terpenuhi | Skema zod membuang field tak dikenal; respons dipetakan ke bentuk publik                                                              |
+| API4 Unrestricted Resource Consumption               | Terpenuhi | Rate limit berlapis, batas body/halaman/offset, query SQL berindeks, timeout                                                          |
+| API5 Broken Function Level Authorization             | Terpenuhi | `requireRole`/`requireAdmin` di server; route internal butuh service token                                                            |
+| API6 Unrestricted Access to Sensitive Business Flows | Sebagian  | Idempotensi, stok atomik, kuota per akun, verifikasi email sebelum pemesanan                                                          |
+| API7 Server Side Request Forgery                     | Terpenuhi | Tidak ada URL dari pengguna; ID divalidasi UUID dan di-encode                                                                         |
+| API8 Security Misconfiguration                       | Terpenuhi | Header keamanan, CORS allowlist, error generik, container non-root read-only                                                          |
+| API9 Improper Inventory Management                   | Terpenuhi | OpenAPI 3.1 dari skema zod, `/api/v1`, alias lama dengan Deprecation/Sunset                                                           |
+| API10 Unsafe Consumption of APIs                     | Terpenuhi | Respons upstream divalidasi skema dan aritmetikanya diperiksa ulang                                                                   |
 
 "Terpenuhi" berarti kontrol yang relevan untuk fitur yang ada sudah diterapkan dan diuji, bukan bahwa risikonya nol.
 
@@ -43,13 +43,15 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 - Kunci publik diambil dari JWKS dengan cache dan cooldown; `kid` palsu tidak bisa menghabiskan kuota fetch: [`signing-keys.ts`](../services/product-service/src/middleware/signing-keys.ts).
 - Access token 15 menit. Refresh token opaque disimpan sebagai hash SHA-256, dikirim sebagai cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, dirotasi setiap dipakai. Pemakaian ulang token yang sudah dirotasi mencabut seluruh sesi: [`sessions.ts` `rotateSession`](../services/auth-service/src/sessions.ts).
 - Logout mencabut keluarga sesi (`sid`) secara durable. Auth menolak langsung; product/order menyinkronkan daftar pencabutan melalui endpoint internal dengan cache 5 detik (ditambah waktu komunikasi). Cache kedaluwarsa tanpa sinkronisasi menjawab 503 `SESSION_CHECK_UNAVAILABLE`, bukan menerima JWT sampai 15 menit. Token tanpa `sid` ditolak. Endpoint cookie dilindungi CSRF tiga lapis (SameSite, header kustom, allowlist Origin): [`routes.ts` `requireSameSiteRequest`](../services/auth-service/src/routes.ts).
-- Login: bcrypt dengan hash umpan untuk email tak dikenal (waktu respons seragam), batas 72 byte, limit per IP 20/menit, dan backoff eksponensial per akun setelah 5 kegagalan, termasuk untuk email yang tidak terdaftar: [`sessions.ts` `assertLoginAllowed`](../services/auth-service/src/sessions.ts).
+- Login: bcrypt dengan hash umpan untuk email tak dikenal (waktu respons seragam), batas 72 byte, limit per IP 20/menit, dan backoff eksponensial per akun setelah 5 kegagalan, termasuk untuk email yang tidak terdaftar: [`sessions.ts` `assertLoginAllowed`](../services/auth-service/src/sessions.ts). Browser yang pernah berhasil masuk dinilai dengan penghitung device cookie-nya sendiri, sehingga backoff tidak bisa dipakai mengunci pemilik akun: [`devices.ts`](../services/auth-service/src/devices.ts).
+- Pendaftaran dan permintaan reset password menjawab sama untuk alamat mana pun; hasilnya hanya sampai lewat email. Akun aktif setelah verifikasi dengan tautan dan password; akun yang belum diverifikasi ditolak login seperti password salah, bisa didaftarkan ulang, dan dihapus setelah 24 jam: [`users.ts` `register`](../services/auth-service/src/users.ts), [`verification.ts`](../services/auth-service/src/verification.ts).
+- Reset password lewat tautan sekali pakai (1 jam) mengakhiri semua sesi akun dan melupakan perangkat yang dikenal: [`password-reset.ts`](../services/auth-service/src/password-reset.ts).
 - Access token hanya di memory frontend, tidak di `localStorage`.
 
 **Bukti uji.**
 
-- Unit: `sessions.test.ts` (9 tes: TTL 900 detik, atribut cookie, rotasi, balapan dua tab, deteksi pemakaian ulang, logout, CSRF, backoff per akun); `signing-keys.test.ts`; `product.test.ts` › _banjir token palsu ber-kid acak…_.
-- E2E: _refresh tokens are HttpOnly cookies that rotate and can be revoked_, _repeated wrong passwords slow down that account only_, _forged key IDs cannot lock legitimate users out of authentication_.
+- Unit: `sessions.test.ts` (TTL 900 detik, atribut cookie, rotasi, balapan dua tab, deteksi pemakaian ulang, logout, CSRF, backoff per akun, device cookie, daftar pencabutan); `auth.test.ts` › _registration reveals nothing and cannot occupy an address_; `verification.test.ts`; `password-reset.test.ts`; `signing-keys.test.ts`; `product.test.ts` › _banjir token palsu ber-kid acak…_.
+- E2E: _refresh tokens are HttpOnly cookies that rotate and can be revoked_, _repeated wrong passwords slow down that account only_, _registration reveals nothing; activation needs the link and the password_, _password reset answers every address alike and ends all sessions_, _forged key IDs cannot lock legitimate users out of authentication_.
 - Browser (Playwright): cookie refresh tidak terlihat di `document.cookie`, tidak ada JWT di web storage, sesi pulih setelah reload, logout menutup sesi.
 
 **Celah.**
@@ -62,20 +64,20 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 
 **Kontrol.**
 
-- Mass assignment: semua body divalidasi `z.object`, yang membuang field yang tidak dideklarasikan. Register hanya bisa membuat role `user`: [`users.ts:68`](../services/auth-service/src/users.ts#L68).
+- Mass assignment: semua body divalidasi `z.object`, yang membuang field yang tidak dideklarasikan. Register hanya bisa membuat role `user`: [`users.ts` `register`](../services/auth-service/src/users.ts).
 - Harga, total, status, `userId`, dan `fulfillmentStatus` tidak pernah dibaca dari klien. Harga dan total diambil dari receipt reservasi product-service.
 - Data berlebih: respons dipetakan ke bentuk publik, tanpa `passwordHash` ([`publicUser`](../services/auth-service/src/users.ts#L117)) dan tanpa `input`, `fingerprint`, `failureStatus` milik order (`publicOrder` di [`orders.ts`](../services/order-service/src/orders.ts)).
 
 **Bukti uji.**
 
-- Unit: `auth.test.ts` › _register → 201 dan mengembalikan user tanpa password_.
+- Unit: `auth.test.ts` › _register → 202 dengan jawaban generik, tanpa data akun_.
 - E2E: _register, login, profile and admin bootstrap_ (register dengan `role: 'admin'` tetap menghasilkan role `user`).
 
 ## API4 — Unrestricted Resource Consumption
 
 **Kontrol.**
 
-- Rate limit berlapis: gateway 100/menit/IP ([`app.ts`](../services/gateway/src/app.ts)), backstop per service 300/menit/IP, login/register 20/menit/IP, refresh/logout 60/menit/IP. Panggilan antar-service dikecualikan hanya bila membawa service token valid.
+- Rate limit berlapis: gateway 100/menit/IP ([`app.ts`](../services/gateway/src/app.ts)), backstop per service 300/menit/IP, login/register 20/menit/IP, verifikasi email dan reset password 20/menit/IP, refresh/logout 60/menit/IP. Panggilan antar-service dikecualikan hanya bila membawa service token valid.
 - Ukuran: body 100 KB di service dan nginx, respons upstream maksimal 1 MiB ([`resilient-http-client`](../packages/resilient-http-client/src/index.ts)).
 - Jumlah: halaman maksimal 100, `offset` maksimal 10.000 (lebih dalam memakai `cursor`), 50 produk per order/keranjang, kuantitas 1–1000, pencarian 100 karakter ([`schemas.ts`](../services/order-service/src/schemas.ts)).
 - Biaya query: order dan produk disimpan di tabel relasional berindeks ([`order-service/src/migrations.ts`](../services/order-service/src/migrations.ts), [`product-service/src/migrations.ts`](../services/product-service/src/migrations.ts)). Daftar, ringkasan admin, dan antrean recovery dijawab SQL dengan `LIMIT`, bukan dengan membaca semua baris lalu memfilter di memory. Pagination keyset (`cursor`) tidak melewati atau menggandakan baris saat order baru masuk.

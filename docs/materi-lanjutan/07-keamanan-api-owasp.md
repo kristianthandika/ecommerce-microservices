@@ -38,6 +38,7 @@ $otherEmail = "lain-$labRun@example.test"
 $otherBody = @{ email = $otherEmail; password = $labPassword } | ConvertTo-Json
 $null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
   -ContentType 'application/json' -Body $otherBody
+Confirm-LabAccount $otherEmail $labPassword
 $otherSession = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/login" `
   -ContentType 'application/json' -Body $otherBody
 $otherHeaders = @{ Authorization = "Bearer $($otherSession.token)" }
@@ -63,7 +64,10 @@ foreach ($attempt in @(
 ```powershell
 $sneaky = @{ email = "naik-$labRun@example.test"; password = $labPassword; role = 'admin' } |
   ConvertTo-Json
-(Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
+$null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
+  -ContentType 'application/json' -Body $sneaky
+Confirm-LabAccount "naik-$labRun@example.test" $labPassword
+(Invoke-RestMethod -Method Post -Uri "$apiBase/auth/login" `
   -ContentType 'application/json' -Body $sneaky).user.role
 
 $cheap = @{ items = @(@{ productId = $product.id; quantity = 1 }); total = 1 } |
@@ -87,6 +91,7 @@ $cheap = @{ items = @(@{ productId = $product.id; quantity = 1 }); total = 1 } |
 $victim = @{ email = "target-$labRun@example.test"; password = $labPassword } | ConvertTo-Json
 $null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
   -ContentType 'application/json' -Body $victim
+Confirm-LabAccount "target-$labRun@example.test" $labPassword
 $wrong = @{ email = "target-$labRun@example.test"; password = 'salah-salah-salah' } | ConvertTo-Json
 foreach ($i in 1..6) {
   try { $null = Invoke-RestMethod -Method Post -Uri "$apiBase/auth/login" `
@@ -99,6 +104,20 @@ foreach ($i in 1..6) {
 ```
 
 **Hasil:** lima percobaan pertama `401`, percobaan keenam `429` dengan `Retry-After` sekitar 30 detik. Login dengan password **benar** selama jeda juga `429`. **Diskusi:** mengapa backoff bersifat sementara, bukan penguncian permanen? (Penguncian permanen memberi penyerang cara mengunci akun korban.) Mengapa email yang tidak terdaftar juga diperlambat?
+
+6. Backoff saja masih bisa disalahgunakan: siapa pun dapat menahan login korban dengan terus mengirim password salah. Lihat cookie `device_id` di DevTools setelah login. Browser yang pernah berhasil masuk ke suatu akun memakai penghitung kegagalannya sendiri, sehingga pemilik akun tetap bisa masuk dari browser itu walau emailnya sedang ditahan bagi klien lain. Lima password salah membuat cookie itu hangus.
+
+7. Bandingkan jawaban pendaftaran untuk alamat baru dan alamat yang sudah punya akun:
+
+```powershell
+$fresh = @{ email = "baru-$labRun@example.test"; password = $labPassword } | ConvertTo-Json
+foreach ($body in $fresh, $labCredentials) {
+  Invoke-RestMethod -Method Post -Uri "$apiBase/auth/register" `
+    -ContentType 'application/json' -Body $body | ConvertTo-Json -Compress
+}
+```
+
+**Hasil:** keduanya `202` dengan isi yang sama. Akun `$labEmail` tidak berubah; pemiliknya menerima pemberitahuan di kotak surat pelatihan. **Diskusi:** mengapa login juga harus menolak akun yang belum diverifikasi dengan jawaban yang sama seperti password salah? (Tanpa itu, "daftar lalu coba masuk" kembali membocorkan apakah alamatnya sudah terdaftar.) Mengapa verifikasi meminta password, bukan hanya tautan?
 
 ## S4 — API4 dan API5: batas sumber daya dan fungsi admin (20 menit)
 

@@ -55,8 +55,23 @@ export function createApp({
         }),
     }),
   );
+  // Bucket tersendiri: verifikasi memeriksa password (bcrypt) dan atur ulang
+  // password mengirim email, jadi keduanya dibatasi seketat login.
   app.use(
-    ['/refresh', '/logout', '/verify-email', '/email-verification'],
+    ['/verify-email', '/password-reset'],
+    rateLimit({
+      windowMs: 60000,
+      limit: 20,
+      standardHeaders: true,
+      legacyHeaders: false,
+      handler: (_req, res) =>
+        res.status(429).json({
+          error: { message: 'Terlalu banyak percobaan autentikasi', code: 'RATE_LIMITED' },
+        }),
+    }),
+  );
+  app.use(
+    ['/refresh', '/logout'],
     rateLimit({
       windowMs: 60000,
       limit: 60,

@@ -7,7 +7,7 @@ export interface User {
   id: string;
   email: string;
   role: string;
-  /** false: the account may browse and fill a cart but not create orders yet. */
+  /** Only verified accounts can sign in; kept for tokens issued before that rule. */
   emailVerified?: boolean;
 }
 export interface OutboxMessage {
@@ -199,8 +199,16 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 }
 
 export const api = {
+  /**
+   * Always answers the same way, whether or not the address already has an account;
+   * the outcome only reaches the mailbox. `verificationRequired` is server
+   * configuration: when true the account must be activated by mail before signing in.
+   */
   register: (email: string, password: string) =>
-    request<{ user: User }>('/auth/register', { method: 'POST', body: { email, password } }),
+    request<{ status: 'accepted'; verificationRequired: boolean }>('/auth/register', {
+      method: 'POST',
+      body: { email, password },
+    }),
   login: (email: string, password: string) =>
     request<Session>('/auth/login', {
       method: 'POST',
@@ -231,13 +239,23 @@ export const api = {
     await request<void>('/auth/logout', { method: 'POST', headers: SESSION_HEADER, token });
   },
   me: (token: string) => request<{ user: User }>('/auth/me', { token }),
-  verifyEmail: (verificationToken: string) =>
+  /** Activates an account: the mailed token AND the password chosen at registration. */
+  verifyEmail: (verificationToken: string, password: string) =>
     request<{ user: User }>('/auth/verify-email', {
       method: 'POST',
-      body: { token: verificationToken },
+      body: { token: verificationToken, password },
     }),
-  resendVerification: (token: string) =>
-    request<{ sent: true }>('/auth/email-verification', { method: 'POST', token }),
+  /** Same answer for every address; a link is mailed only when it has an account. */
+  requestPasswordReset: (email: string) =>
+    request<{ status: 'accepted' }>('/auth/password-reset', {
+      method: 'POST',
+      body: { email },
+    }),
+  confirmPasswordReset: (resetToken: string, password: string) =>
+    request<{ user: User }>('/auth/password-reset/confirm', {
+      method: 'POST',
+      body: { token: resetToken, password },
+    }),
   /** Training mailbox; 404 when mail is really sent (MAIL_TRANSPORT=webhook). */
   outbox: (token: string, limit = 20) =>
     request<{ messages: OutboxMessage[] }>(`/auth/admin/outbox?limit=${limit}`, { token }),

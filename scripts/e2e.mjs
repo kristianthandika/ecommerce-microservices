@@ -89,17 +89,42 @@ async function healthy() {
   throw new Error('Stack did not become healthy');
 }
 let adminToken, userToken, otherToken, product, durableOrder;
-/** Confirms an address with the link from the training mailbox (MAIL_TRANSPORT=outbox). */
-async function verifyEmail(address) {
-  const mailbox = await api(`/auth/admin/outbox?to=${encodeURIComponent(address)}`, {
-    token: adminToken,
+/** Newest mailed link of one kind from the training mailbox (MAIL_TRANSPORT=outbox). */
+async function mailedToken(address, kind = 'verify-email') {
+  // Mail leaves after the HTTP response, so give it a moment to arrive.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const mailbox = await api(`/auth/admin/outbox?to=${encodeURIComponent(address)}&limit=100`, {
+      token: adminToken,
+    });
+    assert.equal(mailbox.status, 200);
+    const mail = responses.Outbox.parse(mailbox.data).messages.find((message) =>
+      message.link?.includes(`/${kind}#token=`),
+    );
+    if (mail) return mail.link.split('#token=')[1];
+    await sleep(250);
+  }
+  throw new Error(`No ${kind} mail arrived for ${address}`);
+}
+/** Activates an account: the mailed link AND the password chosen at registration. */
+async function verifyEmail(address, pass = password) {
+  const token = await mailedToken(address);
+  const verified = await api('/auth/verify-email', {
+    method: 'POST',
+    body: { token, password: pass },
   });
-  assert.equal(mailbox.status, 200);
-  const token = responses.Outbox.parse(mailbox.data).messages[0].link.split('#token=')[1];
-  const verified = await api('/auth/verify-email', { method: 'POST', body: { token } });
   assert.equal(verified.status, 200);
   assert.equal(responses.UserEnvelope.parse(verified.data).user.emailVerified, true);
   return token;
+}
+/** Registration answers every address the same way; the body carries no account data. */
+async function register(body) {
+  const registered = await api('/auth/register', { method: 'POST', body });
+  assert.equal(registered.status, 202);
+  assert.deepEqual(responses.RegistrationAccepted.parse(registered.data), {
+    status: 'accepted',
+    verificationRequired: true,
+  });
+  return registered;
 }
 const racerTokens = [];
 const prefix = randomUUID();
@@ -123,91 +148,87 @@ try {
     assert.equal(admin.status, 200);
     assert.equal(admin.data.user.role, 'admin');
     adminToken = admin.data.token;
-    const registered = await api('/auth/register', {
-      method: 'POST',
-      body: { email, password, role: 'admin' },
-    });
-    assert.equal(registered.status, 201);
-    assert.equal(registered.data.user.emailVerified, false);
+    // A role sent by the client is ignored (mass assignment): the account is a user.
+    await register({ email, password, role: 'admin' });
+    // Until the address is confirmed the account answers like a wrong password.
+    const early = await api('/auth/login', { method: 'POST', body: { email, password } });
+    assert.equal(early.status, 401);
+    assert.equal(early.data.error.code, 'INVALID_CREDENTIALS');
+    await verifyEmail(email);
     const login = await api('/auth/login', {
       method: 'POST',
       body: { email: email.toUpperCase(), password },
     });
     assert.equal(login.status, 200);
     assert.equal(login.data.user.role, 'user');
+    assert.equal(login.data.user.emailVerified, true);
     userToken = login.data.token;
     assert.equal((await api('/auth/me', { token: userToken })).data.user.email, email);
     const secondEmail = `other-${prefix}@test.local`;
-    assert.equal(
-      (await api('/auth/register', { method: 'POST', body: { email: secondEmail, password } }))
-        .status,
-      201,
-    );
+    await register({ email: secondEmail, password });
+    await verifyEmail(secondEmail);
     otherToken = (
       await api('/auth/login', { method: 'POST', body: { email: secondEmail, password } })
     ).data.token;
     // Separate customers for the stock race: one account may hold only a few open orders.
     for (let i = 0; i < 3; i++) {
       const racer = { email: `racer${i}-${prefix}@test.local`, password };
-      assert.equal((await api('/auth/register', { method: 'POST', body: racer })).status, 201);
+      await register(racer);
       await verifyEmail(racer.email);
       racerTokens.push((await api('/auth/login', { method: 'POST', body: racer })).data.token);
     }
   });
-  await check('unverified accounts can browse and fill a cart but cannot order', async () => {
-    // Only administrators can read the training mailbox; the account itself cannot.
-    assert.equal((await api('/auth/admin/outbox', { token: userToken })).status, 403);
-    assert.equal((await api('/cart', { token: userToken })).status, 200);
-    const sample = (await api('/products?limit=1')).data.products[0];
-    const attempt = () =>
-      api('/orders', {
+  await check(
+    'registration reveals nothing; activation needs the link and the password',
+    async () => {
+      // Only administrators can read the training mailbox; the account itself cannot.
+      assert.equal((await api('/auth/admin/outbox', { token: userToken })).status, 403);
+      // Registering a taken address is answered exactly like a new one, and changes nothing.
+      await register({ email, password: `Other-${randomUUID()}` });
+      assert.equal(
+        (await api('/auth/login', { method: 'POST', body: { email, password } })).status,
+        200,
+      );
+      // A registration that was never confirmed cannot be activated by the link alone,
+      // nor with a guessed password, and cannot sign in.
+      const pending = `pending-${prefix}@test.local`;
+      await register({ email: pending, password });
+      const token = await mailedToken(pending);
+      const guessed = await api('/auth/verify-email', {
         method: 'POST',
-        token: userToken,
-        key: randomUUID(),
-        body: { items: [{ productId: sample.id, quantity: 1 }] },
+        body: { token, password: 'not-the-password' },
       });
-    const refused = await attempt();
-    assert.equal(refused.status, 403);
-    assert.equal(refused.data.error.code, 'EMAIL_NOT_VERIFIED');
-    const cart = await api('/cart', { token: userToken });
-    const checkout = await api('/cart/checkout', {
-      method: 'POST',
-      token: userToken,
-      key: randomUUID(),
-      headers: { 'if-match': cart.headers.get('etag') },
-      body: {
-        shippingAddress: {
-          recipient: 'Pembeli Uji',
-          phone: '081234567890',
-          street: 'Jalan Uji 123',
-          city: 'Bandung',
-          province: 'Jawa Barat',
-          postalCode: '40123',
-        },
-      },
-    });
-    assert.equal(checkout.status, 403);
-    assert.equal(checkout.data.error.code, 'EMAIL_NOT_VERIFIED');
-    assert.equal((await api(`/products/${sample.id}`)).data.product.stock, sample.stock);
-    const used = await verifyEmail(email);
-    // The link works once, and the token issued before verification still says "unverified".
-    assert.equal(
-      (await api('/auth/verify-email', { method: 'POST', body: { token: used } })).status,
-      400,
-    );
-    assert.equal((await attempt()).status, 403);
-    const login = await api('/auth/login', { method: 'POST', body: { email, password } });
-    assert.equal(login.data.user.emailVerified, true);
-    userToken = login.data.token;
-  });
-  await check('concurrent duplicate registrations return one 201 and one 409', async () => {
-    const body = { email: `race-${prefix}@test.local`, password };
-    const results = await Promise.all([
-      api('/auth/register', { method: 'POST', body }),
-      api('/auth/register', { method: 'POST', body }),
-    ]);
-    assert.deepEqual(results.map((r) => r.status).sort(), [201, 409]);
-  });
+      assert.equal(guessed.status, 401);
+      assert.equal(
+        (await api('/auth/verify-email', { method: 'POST', body: { token } })).status,
+        400,
+      );
+      assert.equal(
+        (await api('/auth/login', { method: 'POST', body: { email: pending, password } })).status,
+        401,
+      );
+      // With the right password the same link works, exactly once.
+      const used = await verifyEmail(pending);
+      assert.equal(
+        (await api('/auth/verify-email', { method: 'POST', body: { token: used, password } }))
+          .status,
+        400,
+      );
+    },
+  );
+  await check(
+    'concurrent duplicate registrations are both accepted and leave one account',
+    async () => {
+      const body = { email: `race-${prefix}@test.local`, password };
+      const results = await Promise.all([register(body), register(body)]);
+      assert.deepEqual(
+        results.map((r) => r.status),
+        [202, 202],
+      );
+      await verifyEmail(body.email);
+      assert.equal((await api('/auth/login', { method: 'POST', body })).status, 200);
+    },
+  );
   await check('malformed JSON, password byte limit and missing token are rejected', async () => {
     assert.equal((await api('/auth/login', { method: 'POST', raw: '{' })).status, 400);
     assert.equal(
@@ -572,7 +593,8 @@ try {
   });
   await check('repeated wrong passwords slow down that account only', async () => {
     const target = `throttle-${prefix}@test.local`;
-    await api('/auth/register', { method: 'POST', body: { email: target, password } });
+    await register({ email: target, password });
+    await verifyEmail(target);
     for (let i = 0; i < 5; i++) {
       const miss = await api('/auth/login', {
         method: 'POST',
@@ -586,6 +608,51 @@ try {
     assert.ok(Number(locked.headers.get('retry-after')) > 0);
     const unaffected = await api('/auth/login', { method: 'POST', body: { email, password } });
     assert.equal(unaffected.status, 200);
+  });
+  await check('password reset answers every address alike and ends all sessions', async () => {
+    const account = { email: `reset-${prefix}@test.local`, password };
+    await register(account);
+    await verifyEmail(account.email);
+    const before = (await api('/auth/login', { method: 'POST', body: account })).data.token;
+    const request = (address) =>
+      api('/auth/password-reset', { method: 'POST', body: { email: address } });
+    const known = await request(account.email);
+    const unknown = await request(`nobody-${prefix}@test.local`);
+    assert.equal(known.status, 202);
+    assert.deepEqual(unknown.data, known.data);
+    responses.Accepted.parse(known.data);
+    const token = await mailedToken(account.email, 'reset-password');
+    const fresh = `New-${randomUUID()}`;
+    const confirmed = await api('/auth/password-reset/confirm', {
+      method: 'POST',
+      body: { token, password: fresh },
+    });
+    assert.equal(confirmed.status, 200);
+    responses.UserEnvelope.parse(confirmed.data);
+    // The session from before the reset is refused at once; the old password is gone.
+    const refused = await api('/auth/me', { token: before });
+    assert.equal(refused.status, 401);
+    assert.equal(refused.data.error.code, 'SESSION_REVOKED');
+    assert.equal((await api('/auth/login', { method: 'POST', body: account })).status, 401);
+    assert.equal(
+      (
+        await api('/auth/login', {
+          method: 'POST',
+          body: { email: account.email, password: fresh },
+        })
+      ).status,
+      200,
+    );
+    // The link works once.
+    assert.equal(
+      (
+        await api('/auth/password-reset/confirm', {
+          method: 'POST',
+          body: { token, password: `Again-${randomUUID()}` },
+        })
+      ).status,
+      400,
+    );
   });
   await check('responses match the published OpenAPI contract', async () => {
     const document = await fetch(`${base}/openapi.json`);

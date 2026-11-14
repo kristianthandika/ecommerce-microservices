@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
+import { cookieOf, nextIp, signUp } from './helpers.ts';
 
 const keysDir = mkdtempSync(join(tmpdir(), 'auth-sessions-'));
 process.env.KEYS_DIR = keysDir;
@@ -23,16 +24,10 @@ beforeAll(async () => {
 afterAll(() => rmSync(keysDir, { recursive: true, force: true }));
 
 /** The refresh cookie value from a Set-Cookie header, plus its attributes. */
-function refreshCookie(res: request.Response) {
-  const header = ([] as string[])
-    .concat(res.headers['set-cookie'] ?? [])
-    .find((cookie) => cookie.startsWith('refresh_token='));
-  return header ? { value: header.split(';')[0].split('=')[1], header } : undefined;
-}
-let signInSequence = 0;
+const refreshCookie = (res: request.Response) => cookieOf(res, 'refresh_token');
 async function signIn(email: string) {
-  const clientIp = `192.0.2.${++signInSequence}`;
-  await request(app).post('/register').set('x-forwarded-for', clientIp).send({ email, password });
+  const clientIp = nextIp();
+  await signUp(app, email, password, clientIp);
   const res = await request(app)
     .post('/login')
     .set('x-forwarded-for', clientIp)
@@ -136,10 +131,10 @@ describe('access and refresh tokens', () => {
     expect(sessions.isSessionRevoked(start.familyId, 2_000_000)).toBe(false);
     expect(sessions.rotateSession(start.token, 2_000_000 + 60_000).kind).toBe('reused');
     expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 60_001)).toBe(true);
-    // Keep revocations for the maximum configurable TTL, even if it was reduced on restart.
-    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 60_000 + 961_000)).toBe(true);
-    // Once every possible access token has expired the entry is dropped.
-    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 60_000 + 3_661_000)).toBe(false);
+    // The newest access token was issued at 2,000,000 and lives 15 minutes: the entry
+    // stays until then (plus one minute for clock differences) and not longer.
+    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 959_000)).toBe(true);
+    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 961_000)).toBe(false);
   });
 
   it('revokes a signed access token even when its refresh cookie is missing', async () => {
@@ -252,6 +247,101 @@ describe('access and refresh tokens', () => {
   });
 });
 
+describe('revocation list stays short', () => {
+  it('publishes no entry for a session whose access token has already expired', () => {
+    const idle = sessions.startSession('idle-user', 3_000_000);
+    // Logged out 20 minutes later: the 15-minute access token is long gone.
+    sessions.endSession(idle.token, 3_000_000 + 20 * 60_000);
+    expect(sessions.isSessionRevoked(idle.familyId, 3_000_000 + 20 * 60_000 + 1)).toBe(false);
+    expect(() => sessions.rotateSession(idle.token, 3_000_000 + 20 * 60_000 + 2)).toThrow(
+      'Sesi berakhir',
+    );
+  });
+
+  it('ends every session of an account at once, listing only the ones still usable', () => {
+    const now = 4_000_000;
+    const old = sessions.startSession('many-sessions', now);
+    const recent = sessions.startSession('many-sessions', now + 30 * 60_000);
+    const other = sessions.startSession('somebody-else', now + 30 * 60_000);
+    const ended = sessions.endAllSessions('many-sessions', 'password-reset', now + 31 * 60_000);
+    expect(ended).toBe(2);
+    const at = now + 31 * 60_000 + 1;
+    expect(sessions.isSessionRevoked(recent.familyId, at)).toBe(true);
+    expect(sessions.isSessionRevoked(old.familyId, at)).toBe(false); // token expired long ago
+    expect(sessions.isSessionRevoked(other.familyId, at)).toBe(false);
+    for (const session of [old, recent])
+      expect(() => sessions.rotateSession(session.token, at)).toThrow('Sesi berakhir');
+    expect(sessions.rotateSession(other.token, at).kind).toBe('rotated');
+  });
+});
+
+describe('device cookies keep a known browser out of an attacker-made lockout', () => {
+  const deviceCookie = (res: request.Response) => cookieOf(res, 'device_id');
+  const attempt = (email: string, pass: string, device?: string) => {
+    const req = request(app).post('/login').set('x-forwarded-for', nextIp());
+    return (device ? req.set('cookie', `device_id=${device}`) : req).send({
+      email,
+      password: pass,
+    });
+  };
+
+  it('marks the browser on a successful login with a locked-down cookie', async () => {
+    const { res } = await signIn('device-attrs@test.local');
+    const cookie = deviceCookie(res)!;
+    expect(cookie.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(cookie.header).toMatch(/HttpOnly/);
+    expect(cookie.header).toMatch(/Secure/);
+    expect(cookie.header).toMatch(/SameSite=Strict/);
+    expect(cookie.header).toMatch(/Path=\/api\/v1\/auth;/);
+    expect(JSON.stringify(res.body)).not.toContain(cookie.value);
+  });
+
+  it('lets the owner sign in from a known browser while the email is locked for everyone else', async () => {
+    const email = 'device-victim@test.local';
+    const { res } = await signIn(email);
+    const device = deviceCookie(res)!.value;
+    // An attacker sends wrong passwords until the per-email backoff engages.
+    for (let i = 0; i < 5; i++) expect((await attempt(email, 'wrong-password')).status).toBe(401);
+    const stranger = await attempt(email, password);
+    expect(stranger.status).toBe(429);
+    expect(stranger.body.error.code).toBe('LOGIN_THROTTLED');
+    // The owner, in the browser they used before, is not affected.
+    const owner = await attempt(email, password, device);
+    expect(owner.status).toBe(200);
+    // Their login does not lift the lock for clients without the cookie.
+    expect((await attempt(email, password)).status).toBe(429);
+    // The cookie is replaced on every successful login.
+    expect(deviceCookie(owner)!.value).not.toBe(device);
+    expect((await attempt(email, password, deviceCookie(owner)!.value)).status).toBe(200);
+  });
+
+  it('gives a stolen cookie only a few guesses, and none for another account', async () => {
+    const email = 'device-stolen@test.local';
+    const other = 'device-other@test.local';
+    const { res } = await signIn(email);
+    const device = deviceCookie(res)!.value;
+    await signIn(other);
+    // Lock both accounts for clients without a cookie.
+    for (const target of [email, other])
+      for (let i = 0; i < 5; i++) await attempt(target, 'wrong-password');
+    // The cookie belongs to one account; it does not unlock the other.
+    expect((await attempt(other, password, device)).status).toBe(429);
+    // Five wrong passwords use the cookie up...
+    for (let i = 0; i < 5; i++)
+      expect((await attempt(email, 'wrong-password', device)).status).toBe(401);
+    // ...after which it is an ordinary, locked-out client again.
+    expect((await attempt(email, password, device)).status).toBe(429);
+  });
+
+  it('ignores malformed or unknown cookies', async () => {
+    const email = 'device-unknown@test.local';
+    await signIn(email);
+    for (let i = 0; i < 5; i++) await attempt(email, 'wrong-password');
+    for (const forged of ['x', 'a'.repeat(43), '../../etc/passwd'])
+      expect((await attempt(email, password, forged)).status).toBe(429);
+  });
+});
+
 describe('per-account login throttling', () => {
   // Each test uses its own client IP so the per-IP limiter (20/min) cannot be
   // mistaken for the per-account backoff under test.
@@ -263,7 +353,7 @@ describe('per-account login throttling', () => {
   const login = () => request(app).post('/login').set('x-forwarded-for', ip);
   it('backs off after five failures, even for the right password, then recovers', async () => {
     const email = 'throttle@test.local';
-    await request(app).post('/register').set('x-forwarded-for', ip).send({ email, password });
+    await signUp(app, email, password);
     for (let i = 0; i < 5; i++)
       expect((await login().send({ email, password: 'wrong-password' })).status).toBe(401);
     const locked = await login().send({ email, password });
@@ -271,10 +361,7 @@ describe('per-account login throttling', () => {
     expect(locked.body.error.code).toBe('LOGIN_THROTTLED');
     expect(Number(locked.headers['retry-after'])).toBeGreaterThan(25);
     // Another account is not affected.
-    await request(app)
-      .post('/register')
-      .set('x-forwarded-for', ip)
-      .send({ email: 'other@test.local', password });
+    await signUp(app, 'other@test.local', password);
     expect((await login().send({ email: 'other@test.local', password })).status).toBe(200);
   });
 

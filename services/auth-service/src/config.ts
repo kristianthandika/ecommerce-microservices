@@ -48,10 +48,25 @@ export const config = {
     windowMs: 15 * 60_000,
   },
   emailVerification: {
-    // Akun baru harus memverifikasi email sebelum boleh membuat pesanan (OWASP API6).
+    // Akun baru baru bisa masuk setelah emailnya diverifikasi (OWASP API2/API6). Bila
+    // dimatikan (hanya untuk pengembangan lokal), akun langsung aktif dan perlindungan
+    // terhadap penebakan akun lewat pendaftaran tidak berlaku.
     required: process.env.EMAIL_VERIFICATION_REQUIRED !== 'false',
+    // Juga umur akun yang belum diverifikasi: setelah itu akunnya dihapus.
     ttlMs: 24 * 3_600_000,
-    resendCooldownMs: 60_000,
+    // Salah password sebanyak ini membuat satu tautan tidak berlaku lagi.
+    maxPasswordAttempts: 5,
+  },
+  passwordReset: {
+    ttlMs: 60 * 60_000,
+  },
+  // "Device cookie" (rekomendasi OWASP): browser yang pernah berhasil masuk tidak
+  // ikut terkunci oleh backoff per email, sehingga penyerang tidak bisa menahan
+  // login korban hanya dengan mengirim password salah.
+  device: {
+    cookieName: 'device_id',
+    ttlMs: 90 * 24 * 3_600_000,
+    maxFailures: 5,
   },
   mail: {
     // 'outbox' = disimpan di database dan terbaca admin (pelatihan/lokal saja);
@@ -63,6 +78,14 @@ export const config = {
     webhookToken: readSecret('MAIL_WEBHOOK_TOKEN'),
     // Alamat frontend yang dilihat pengguna; dasar tautan di dalam email.
     publicAppUrl: (process.env.PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, ''),
+    // Paling banyak satu email per jenis per alamat dalam jangka ini. Permintaan
+    // berikutnya dilewati tanpa pemberitahuan, supaya endpoint publik tidak bisa
+    // dipakai membanjiri kotak masuk dan jawabannya tidak membocorkan apa pun.
+    cooldownMs: 60_000,
+    // Dan paling banyak sekian per jenis per alamat dalam 24 jam: pendaftaran dan
+    // lupa password selalu "berhasil", jadi tanpa batas ini siapa pun bisa mengirimi
+    // satu alamat sebuah email setiap menit, selamanya.
+    dailyLimit: 10,
   },
   bcryptSaltRounds: Number(process.env.BCRYPT_SALT_ROUNDS || 10),
   // Kredensial admin demo (HANYA untuk training — lihat DECISIONS.md).

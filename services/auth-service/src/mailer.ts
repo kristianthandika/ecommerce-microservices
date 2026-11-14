@@ -8,7 +8,8 @@ import { database } from './database.ts';
  *
  * - `outbox` keeps messages in this service's database for 24 hours, readable by
  *   administrators through GET /admin/outbox. For training and local development
- *   only: whoever can read the outbox can verify any address.
+ *   only: whoever can read the outbox can use the password-reset links in it, and
+ *   so take over any account.
  * - `webhook` POSTs `{ to, subject, text }` as JSON to MAIL_WEBHOOK_URL (a mail API
  *   or relay run by the operator). Nothing is stored here.
  */
@@ -26,6 +27,49 @@ export interface OutboxMessage extends Mail {
 
 const OUTBOX_RETENTION_MS = 24 * 3_600_000;
 const outbox = database.store<OutboxMessage>('outbox');
+
+export type MailKind = 'verification' | 'account-exists' | 'password-reset';
+interface MailQuota {
+  sentAt: number; // last mail that was really sent
+  askedAt: number;
+  windowStart?: number; // start of the 24-hour window `sent` counts in
+  sent?: number;
+}
+const sends = database.store<MailQuota>('mail_sends');
+const DAY_MS = 24 * 3_600_000;
+
+/**
+ * Claims a mail of `kind` to `to`: at most one per cooldown and `dailyLimit` per 24
+ * hours. False otherwise; the caller then sends nothing and tells nobody.
+ *
+ * Public endpoints (register, password reset) answer every request the same way, so
+ * this is what keeps them from flooding a mailbox. The record is written on every
+ * call, also for addresses without an account: a request that leads to a mail and
+ * one that does not cost the same.
+ */
+export function reserveMail(kind: MailKind, to: string, now = Date.now()): boolean {
+  const key = `${kind}:${to}`;
+  return database.transaction(() => {
+    const last = sends.get(key);
+    const { cooldownMs, dailyLimit } = config.mail;
+    const previousStart = last ? (last.windowStart ?? last.sentAt) : undefined;
+    const sameWindow = previousStart !== undefined && now - previousStart < DAY_MS;
+    const windowStart = sameWindow ? previousStart : now;
+    const sentInWindow = sameWindow ? (last?.sent ?? 1) : 0;
+    const allowed = (!last || now - last.sentAt >= cooldownMs) && sentInWindow < dailyLimit;
+    sends.set(
+      key,
+      {
+        sentAt: allowed || !last ? now : last.sentAt,
+        askedAt: now,
+        windowStart,
+        sent: sentInWindow + (allowed ? 1 : 0),
+      },
+      windowStart + DAY_MS,
+    );
+    return allowed;
+  });
+}
 
 export async function deliver(mail: Mail, now = Date.now()): Promise<void> {
   if (config.mail.transport === 'webhook') {
@@ -72,10 +116,14 @@ export function listOutbox(
 }
 
 export function purgeExpiredMail(now = Date.now(), batch = 500) {
-  return database.transaction(() => outbox.sweep(now, batch, () => 'delete'));
+  return database.transaction(() => ({
+    outbox: outbox.sweep(now, batch, () => 'delete'),
+    sends: sends.sweep(now, batch, () => 'delete'),
+  }));
 }
 
 /** Test helper. */
 export function _resetOutbox(): void {
   outbox.clear();
+  sends.clear();
 }

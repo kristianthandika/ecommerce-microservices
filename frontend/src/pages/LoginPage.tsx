@@ -18,7 +18,7 @@ export function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate('/dashboard');
+      void navigate('/dashboard');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Gagal login');
     } finally {
@@ -72,10 +72,18 @@ export function LoginPage() {
         </form>
 
         <p className="text-sm text-muted text-center mt-6">
+          <Link to="/forgot-password" className="text-secondary font-medium hover:underline">
+            Lupa password?
+          </Link>
+        </p>
+        <p className="text-sm text-muted text-center mt-2">
           Belum punya akun?{' '}
           <Link to="/register" className="text-secondary font-medium hover:underline">
             Daftar
           </Link>
+        </p>
+        <p className="text-xs text-muted text-center mt-4">
+          Baru mendaftar? Aktifkan akun lewat tautan di email sebelum masuk.
         </p>
       </div>
     </div>

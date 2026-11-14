@@ -98,24 +98,74 @@ try {
     activePage.on('pageerror', (error) => pageErrors.push(sanitize(error.message)));
   }
 
-  await check('browser registration, session restore and locked-down cookie', async () => {
+  await check('browser registration signs nobody in and only points to the mailbox', async () => {
     await page.goto(`${origin}/register`);
     await page.getByLabel('Email', { exact: true }).fill(email);
     await page.getByLabel('Password', { exact: true }).fill(password);
     await page.getByRole('button', { name: 'Daftar', exact: true }).click();
-    await page.waitForURL('**/dashboard');
-    await page.getByText('Email belum diverifikasi.', { exact: true }).waitFor();
-    await page.reload();
-    await page.getByText('Email belum diverifikasi.', { exact: true }).waitFor();
-    const cookie = (await userContext.cookies()).find((item) => item.name === 'refresh_token');
-    assert.ok(cookie?.httpOnly && cookie.secure);
-    assert.equal(cookie.sameSite, 'Strict');
-    assert.equal(cookie.path, '/api/v1/auth');
-    assert.equal(await page.evaluate(() => document.cookie.includes('refresh_token')), false);
-    assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
+    await page.getByRole('status').filter({ hasText: 'Periksa kotak masuk' }).waitFor();
+    assert.equal(new URL(page.url()).pathname, '/register');
+    assert.equal(
+      (await userContext.cookies()).some((item) => item.name === 'refresh_token'),
+      false,
+    );
+    // The account cannot sign in before its address was confirmed.
+    await page.goto(`${origin}/login`);
+    await page.getByLabel('Email', { exact: true }).fill(email);
+    await page.getByLabel('Password', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Masuk', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: 'Email atau password salah' }).waitFor();
   });
 
-  await check('unverified browser can fill cart but cannot confirm checkout', async () => {
+  await check(
+    'mailed link activates with the password, removes the URL token and sets locked-down cookies',
+    async () => {
+      await login(adminPage, process.env.SEED_ADMIN_EMAIL, process.env.SEED_ADMIN_PASSWORD);
+      await adminPage.goto(`${origin}/admin/outbox`);
+      await adminPage
+        .getByRole('heading', { name: 'Kotak surat pelatihan', exact: true })
+        .waitFor();
+      const message = adminPage.getByRole('listitem').filter({ hasText: email });
+      const link = await message
+        .getByRole('link', { name: 'Buka tautan verifikasi' })
+        .getAttribute('href');
+      assert.ok(link);
+      const target = new URL(link);
+      assert.equal(target.pathname, '/verify-email');
+      const verificationToken = new URLSearchParams(target.hash.slice(1)).get('token');
+      assert.ok(verificationToken);
+      secrets.push(verificationToken, link);
+      await page.goto(link);
+      await page.getByRole('button', { name: 'Aktifkan akun', exact: true }).waitFor();
+      assert.equal(new URL(page.url()).hash, '');
+      // The link alone activated nothing.
+      const withoutPassword = await api('/auth/verify-email', {
+        method: 'POST',
+        body: { token: verificationToken },
+      });
+      assert.equal(withoutPassword.status, 400);
+      await page.getByLabel('Password', { exact: true }).fill(password);
+      await page.getByRole('button', { name: 'Aktifkan akun', exact: true }).click();
+      await page.waitForURL('**/dashboard');
+      await page.reload();
+      await page.getByRole('textbox', { name: 'Cari produk' }).waitFor();
+      for (const name of ['refresh_token', 'device_id']) {
+        const cookie = (await userContext.cookies()).find((item) => item.name === name);
+        assert.ok(cookie?.httpOnly && cookie.secure, name);
+        assert.equal(cookie.sameSite, 'Strict');
+        assert.equal(cookie.path, '/api/v1/auth');
+        assert.equal(await page.evaluate((key) => document.cookie.includes(key), name), false);
+      }
+      assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
+      const repeated = await api('/auth/verify-email', {
+        method: 'POST',
+        body: { token: verificationToken, password },
+      });
+      assert.equal(repeated.status, 400);
+    },
+  );
+
+  await check('signed-in browser fills the cart', async () => {
     await page.getByRole('textbox', { name: 'Cari produk' }).fill(productName);
     await page.getByRole('button', { name: 'Cari', exact: true }).click();
     const article = page.getByRole('article').filter({ hasText: productName });
@@ -123,37 +173,12 @@ try {
     await page.getByRole('link', { name: 'Buka keranjang', exact: true }).click();
     await page.getByRole('link', { name: 'Lanjut ke checkout' }).click();
     await page.getByRole('heading', { name: 'Checkout', exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Konfirmasi pesanan' }).isDisabled(), true);
+    assert.equal(
+      await page.getByRole('button', { name: 'Konfirmasi pesanan' }).isDisabled(),
+      false,
+    );
     assert.equal((await api(`/products/${productId}`)).data.product.stock, 4);
   });
-
-  await check('admin training mailbox link verifies once and removes URL token', async () => {
-    await login(adminPage, process.env.SEED_ADMIN_EMAIL, process.env.SEED_ADMIN_PASSWORD);
-    await adminPage.goto(`${origin}/admin/outbox`);
-    await adminPage.getByRole('heading', { name: 'Kotak surat pelatihan', exact: true }).waitFor();
-    const message = adminPage.getByRole('listitem').filter({ hasText: email });
-    const link = await message
-      .getByRole('link', { name: 'Buka tautan verifikasi' })
-      .getAttribute('href');
-    assert.ok(link);
-    const target = new URL(link);
-    assert.equal(target.pathname, '/verify-email');
-    const verificationToken = new URLSearchParams(target.hash.slice(1)).get('token');
-    assert.ok(verificationToken);
-    secrets.push(verificationToken, link);
-    await page.goto(link);
-    await page.getByRole('status').filter({ hasText: 'sudah terverifikasi' }).waitFor();
-    assert.equal(new URL(page.url()).hash, '');
-    const repeated = await api('/auth/verify-email', {
-      method: 'POST',
-      body: { token: verificationToken },
-    });
-    assert.equal(repeated.status, 400);
-    await page.getByRole('link', { name: 'Lanjut belanja', exact: true }).click();
-    await page.waitForURL('**/dashboard');
-    assert.equal(await page.getByText('Email belum diverifikasi.', { exact: true }).count(), 0);
-  });
-
   await check('verified browser checkout confirms one order and deducts one unit', async () => {
     await page.goto(`${origin}/checkout`);
     await page.getByLabel('Nama penerima', { exact: true }).fill('Pembeli Browser');

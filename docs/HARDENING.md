@@ -79,7 +79,7 @@ Workflow GitHub Actions menjalankan pemeriksaan source, audit dependency, build 
 ## Sesi, concurrency, pembatalan, dan retensi
 
 - **Sesi.** Access token JWT berumur 15 menit (`JWT_EXPIRES_IN_SECONDS`) dan hanya disimpan di memory frontend. Refresh token opaque disimpan auth-service sebagai hash SHA-256, dikirim sebagai cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, dan dirotasi setiap dipakai. Token lama yang dipakai ulang setelah jendela 10 detik dianggap dicuri dan seluruh keluarga sesinya dicabut. Logout mencabut sesi di server. Endpoint refresh/logout mewajibkan header `X-Requested-With` dan, bila ada, `Origin` dari `REFRESH_ALLOWED_ORIGINS`. Overlay TLS menyetel origin HTTPS. Untuk lingkungan tanpa HTTPS selain `localhost`, `REFRESH_COOKIE_SECURE=false` diperlukan, tetapi jangan dipakai di production.
-- **Login.** Selain limit per IP, setiap email mendapat backoff eksponensial setelah lima kegagalan (30 detik sampai 15 menit). Penghitung ikut berlaku untuk email yang tidak terdaftar agar tidak membocorkan keberadaan akun.
+- **Login.** Selain limit per IP, setiap email mendapat backoff eksponensial setelah lima kegagalan (30 detik sampai 15 menit). Penghitung ikut berlaku untuk email yang tidak terdaftar agar tidak membocorkan keberadaan akun. Akun yang belum diverifikasi dijawab persis seperti password salah. Browser yang pernah berhasil masuk membawa cookie `device_id` dan dinilai dengan penghitungnya sendiri, sehingga backoff yang dipicu orang lain tidak menahan pemilik akun di browser itu.
 - **Keranjang.** Mutasi memakai `If-Match`/`ETag` (412 bila usang, 428 bila tidak ada). `version` di body masih diterima sementara dengan header `Deprecation` (RFC 9745).
 - **Pembatalan.** Saga dengan kompensasi: niat batal disimpan dulu (`CANCELLATION_REQUESTED`), lalu product-service melepas stok secara idempotent. Pelepasan untuk ID tanpa receipt menulis tombstone sehingga reservasi yang terlambat ditolak. Bila product-service tidak terjangkau, API menjawab 202 dan recovery menyelesaikannya.
 - **Retensi.** Pemetaan Idempotency-Key, alias checkout, dan tiket dihapus 24 jam (`IDEMPOTENCY_RETENTION_HOURS`) setelah order-nya selesai; yang masih PENDING atau sedang dibatalkan ditunda. Refresh token, keluarga sesi, dan penghitung login dihapus setelah kedaluwarsa. Order dan receipt reservasi tidak dihapus.
@@ -94,12 +94,42 @@ Kontrol terbaru dan batas yang tersisa:
 - Logout memakai pencabutan keluarga sesi (`sid`). Auth menolak langsung; product/order memakai cache 5 detik (ditambah waktu komunikasi). Cache kedaluwarsa dan auth gagal dihubungi menghasilkan 503, sehingga JWT tidak diterima terus sampai kedaluwarsa. Ketersediaan operasi terproteksi kini bergantung pada sinkronisasi pencabutan.
 - Pencarian nama produk dan order memakai `instr(lower(...))` yang memindai tabel; `lower()` SQLite hanya melipat huruf ASCII. Pakai FTS5 bila katalog sangat besar.
 - Receipt reservasi dan tombstone disimpan selamanya; retensinya menunggu kebijakan retur.
-- Belum ada pembayaran, sehingga order terkonfirmasi langsung menahan stok. Batas tahan berlaku per akun dan mencakup pembatalan yang belum selesai. Verifikasi email diwajibkan sebelum pemesanan; CAPTCHA belum dipasang dan banyak email terverifikasi masih dapat dimiliki satu orang.
+- Belum ada pembayaran, sehingga order terkonfirmasi langsung menahan stok. Batas tahan berlaku per akun dan mencakup pembatalan yang belum selesai. Verifikasi email diwajibkan sebelum akun bisa masuk; CAPTCHA belum dipasang dan banyak email terverifikasi masih dapat dimiliki satu orang.
 - OpenAPI diperiksa generator, tes cakupan/kontrak, dan linter Redocly melalui `npm run openapi:check`. Hasil tersebut tidak menggantikan DAST atau penetration test.
+
+## Audit ulang 14 November 2026
+
+Perubahan dari pemeriksaan ulang terhadap OWASP API Security Top 10 dan OWASP Top 10:
+
+- **Penjaga route internal (API5/API8).** `isInternalPath` kini mencocokkan path yang akan dikirim proxy, bukan hanya yang diterima. Sebelumnya `/v1/auth/./internal/...`, `%2e`, dan `.\` lolos dari gateway dan tiba di auth-service sebagai `/internal/...`; hanya service token yang masih menahannya. Lewat nginx celah ini tidak terjangkau karena nginx menormalisasi URL; yang terdampak adalah akses langsung ke gateway.
+- **Batas waktu gateway (API4).** `requestTimeout` Fastify bawaannya tanpa batas. Kini 15 detik (`GATEWAY_REQUEST_TIMEOUT_MS`), dan upstream yang menggantung dilepas setelah 15 detik (`GATEWAY_UPSTREAM_TIMEOUT_MS`) dengan jawaban 504.
+- **Daftar pencabutan sesi (API4).** Batas baca 1 MiB hanya memuat sekitar 15.000 sesi, padahal skemanya menerima 100.000. Di atas batas itu daftar gagal dibaca dan semua request terproteksi di product/order dijawab 503. Batas baca kini 8 MiB, sepadan dengan batas skema.
+- **Error handler Express (API8).** URL dengan percent-encoding rusak dan body dengan `Content-Encoding` tak didukung atau rusak sebelumnya dijawab 500; kini 400 atau 415 tanpa meneruskan pesan aslinya.
+- **Header di tepi (API8).** Gateway membuang `access-control-*` kiriman service di belakangnya (nilai bawaan service menimpa `CORS_ORIGIN` gateway) dan memberi `Cache-Control: no-store` pada respons yang tidak menyatakan aturan cache sendiri.
+- **TLS ke upstream.** `@fastify/reply-from` tidak memverifikasi sertifikat upstream secara bawaan. Verifikasi diaktifkan; berlaku bila URL service memakai `https://`.
+- **Jejak audit (A09).** Baris log `request completed`/`request errored` di service memuat `userId`, `role`, dan `sessionId` dari token yang sudah diverifikasi. Error handler gateway kini mencatat penyebab error.
+
+Empat risiko yang semula dicatat sebagai belum ditutup, dan penutupannya:
+
+- **Penebakan akun lewat pendaftaran (API2).** `POST /auth/register` selalu menjawab `202` dengan isi yang sama. Alamat yang sudah punya akun tidak diubah; pemiliknya diberi tahu lewat email. Password selalu di-hash dan setiap hasil menulis satu record, sehingga lamanya respons juga sama; email dikirim setelah respons ditulis. Login menolak akun yang belum diverifikasi dengan jawaban password salah, karena tanpa itu "daftar lalu coba masuk" membocorkan hal yang sama.
+- **Alamat diduduki akun yang tidak diverifikasi.** Verifikasi membutuhkan tautan dari email dan password akun, jadi pemilik kotak surat tidak bisa mengaktifkan pendaftaran orang lain, dan pendaftar tidak bisa mengaktifkan alamat yang emailnya tidak ia baca. Mendaftar ulang mengganti password akun yang belum diverifikasi; akun itu dihapus setelah 24 jam. Reset password lewat tautan email (`/auth/password-reset`, `/auth/password-reset/confirm`) mengakhiri semua sesi akun, melupakan perangkat yang dikenal, dan sekaligus memverifikasi akun.
+- **Backoff login dipakai mengunci korban.** Device cookie (pola OWASP): browser yang pernah berhasil masuk ke suatu akun dinilai dengan penghitung kegagalan cookie-nya sendiri. Cookie bukan kredensial dan hangus setelah lima password salah.
+- **Kualitas kode dan rantai pasok.** ESLint memeriksa promise yang tidak di-await (`no-floating-promises`, `no-misused-promises`, `await-thenable`) pada semua berkas yang tercakup tsconfig. Action GitHub di-pin ke commit SHA.
+
+Daftar pencabutan sesi ikut dirapikan: tiap sesi mencatat sampai kapan access token terakhirnya berlaku, sehingga sesi yang sudah lama diam dicabut tanpa menambah entri dan entri hanya hidup selama access token masih bisa dipakai (bukan 61 menit). Itu membuat pencabutan semua sesi saat reset password tidak membengkakkan daftar.
+
+Batas yang tersisa:
+
+- Dengan `EMAIL_VERIFICATION_REQUIRED=false` (hanya untuk pengembangan lokal) akun langsung aktif, sehingga perlindungan terhadap penebakan akun dan pendudukan alamat tidak berlaku.
+- Device cookie tidak menolong perangkat baru milik korban selama serangan berlangsung; jalan keluarnya lupa password. Siapa pun yang membaca kotak surat korban dapat mengambil alih akunnya, seperti pada semua reset lewat email.
+- Perbedaan waktu respons pendaftaran dan permintaan reset sudah disamakan sebatas yang bisa dilakukan aplikasi; pengukuran statistik jangka panjang dari jaringan yang sama tidak diuji.
+- Pendaftaran dan lupa password mengirim email ke alamat yang diminta siapa pun. Batasnya satu email per jenis per menit dan sepuluh per 24 jam per alamat; orang yang menghabiskan kuota itu membuat pemilik alamat tidak bisa meminta tautan baru sampai jendelanya berakhir (tautan yang sudah terkirim tetap berlaku). CAPTCHA belum dipasang.
+- Daftar pencabutan tetap punya batas keras 100.000 sesi yang masih aktif, dan limiter masih per proses.
+- Uji browser Playwright (`scripts/e2e-browser-security.mjs`) sudah disesuaikan dengan alur baru tetapi belum dijalankan ulang.
 
 ## Pengiriman verifikasi email
 
-Compose dasar adalah mode pelatihan: `MAIL_TRANSPORT=outbox` dan `MAIL_ALLOW_INSECURE_OUTBOX=true`. Admin membaca email simulasi pada `/admin/outbox`; tidak ada pengiriman ke inbox nyata. Akun biasa lama tanpa flag verifikasi perlu meminta email setelah login. Token sekali pakai berlaku 24 jam, dan JWT baru diperlukan setelah verifikasi.
+Compose dasar adalah mode pelatihan: `MAIL_TRANSPORT=outbox` dan `MAIL_ALLOW_INSECURE_OUTBOX=true`. Admin membaca email simulasi pada `/admin/outbox`; tidak ada pengiriman ke inbox nyata. Akun biasa lama tanpa flag verifikasi tidak bisa masuk sampai pemiliknya mendaftar ulang dengan alamat yang sama (password lama tetap dipakai untuk verifikasi) atau memakai lupa password. Token verifikasi sekali pakai berlaku 24 jam dan hanya berguna bersama password akun; token atur ulang password berlaku 1 jam.
 
 Untuk pengiriman nyata, siapkan relay HTTPS yang menerima JSON `{to, subject, text}`, `MAIL_WEBHOOK_TOKEN` dari secret, `FRONTEND_ORIGIN` HTTPS, serta konfigurasi TLS. Jalankan dengan tambahan `-f docker-compose.mail.yml` setelah overlay TLS. Overlay mail mematikan outbox dan memberi auth-service network egress; backend lain tetap pada network internal. Endpoint kotak surat tidak tersedia pada mode webhook. Provider dan pengiriman inbox nyata harus diuji oleh operator sebelum deployment.
 

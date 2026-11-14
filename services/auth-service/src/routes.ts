@@ -9,7 +9,13 @@ import { requireServiceToken } from './middleware/service-token.ts';
 import { getKeyMaterial } from './keys.ts';
 import { register, login, getUserById, accessTokenFor } from './users.ts';
 import { config } from './config.ts';
-import { credentialsSchema, verifyEmailSchema, outboxQuerySchema } from './schemas.ts';
+import {
+  credentialsSchema,
+  verifyEmailSchema,
+  passwordResetRequestSchema,
+  passwordResetConfirmSchema,
+  outboxQuerySchema,
+} from './schemas.ts';
 import {
   startSession,
   rotateSession,
@@ -18,7 +24,9 @@ import {
   endSessionForMissingUser,
   listRevokedSessions,
 } from './sessions.ts';
-import { sendVerification, resendVerification, verifyEmail } from './verification.ts';
+import { sendVerification, sendAccountExistsNotice, verifyEmail } from './verification.ts';
+import { requestPasswordReset, confirmPasswordReset } from './password-reset.ts';
+import { issueDevice } from './devices.ts';
 import { listOutbox } from './mailer.ts';
 
 type Credentials = z.infer<typeof credentialsSchema>;
@@ -30,15 +38,41 @@ const cookieOptions = () => ({
   path: config.refresh.cookiePath, // hanya dikirim ke endpoint auth, bukan ke API lain
 });
 
-function readRefreshCookie(req: Request): string | undefined {
+/** Value of one of our own cookies (opaque base64url tokens); anything else is ignored. */
+function readCookie(req: Request, cookieName: string): string | undefined {
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const [name, ...rest] = part.trim().split('=');
-    if (name === config.refresh.cookieName) {
+    if (name === cookieName) {
       const value = rest.join('=');
       return /^[A-Za-z0-9_-]{20,100}$/.test(value) ? value : undefined;
     }
   }
   return undefined;
+}
+const readRefreshCookie = (req: Request) => readCookie(req, config.refresh.cookieName);
+const readDeviceCookie = (req: Request) => readCookie(req, config.device.cookieName);
+
+/**
+ * Marks this browser as one the account signed in from (see devices.ts). Sent with
+ * the same restrictions as the refresh cookie; it is not a credential.
+ */
+function sendDeviceCookie(req: Request, res: Response, userId: string): void {
+  const device = issueDevice(userId, readDeviceCookie(req));
+  res.cookie(config.device.cookieName, device.token, {
+    ...cookieOptions(),
+    maxAge: Math.max(0, device.expiresAt - Date.now()),
+  });
+}
+
+/**
+ * Runs mail work after the response was written. What is sent (or whether anything
+ * is) depends on whether the address has an account, so the response must not wait
+ * for it: its timing would give that away.
+ */
+function afterResponse(req: Request, what: string, work: () => Promise<unknown>): void {
+  setImmediate(() => {
+    work().catch((err: unknown) => req.log?.error({ err }, `${what} gagal dikirim`));
+  });
 }
 
 function sendSession(
@@ -85,38 +119,60 @@ export function buildRouter(): Router {
 
   // Perhatikan: TIDAK ada try/catch — handler async yang throw/reject otomatis
   // diteruskan ke error handler oleh Express 5.
+  //
+  // Jawabannya SELALU sama, baik alamatnya baru, masih menunggu verifikasi, maupun
+  // sudah punya akun: apa yang terjadi hanya diberitahukan lewat email ke alamat itu
+  // (OWASP API2: pendaftaran tidak boleh bisa dipakai menebak siapa yang punya akun).
   router.post('/register', validate(credentialsSchema), async (req: Request, res: Response) => {
-    const user = await register(req.validated as Credentials);
-    // Akun sudah tersimpan; email yang gagal terkirim bisa diminta ulang setelah login.
-    if (!user.emailVerified)
-      await sendVerification(user).catch((err: unknown) =>
-        req.log?.error({ err }, 'email verifikasi gagal dikirim'),
-      );
-    res.status(201).json({ user });
-  });
-
-  // Tautan di email membawa token di fragment URL; halaman frontend mengirimnya ke sini.
-  router.post('/verify-email', validate(verifyEmailSchema), (req: Request, res: Response) => {
-    const { token } = req.validated as { token: string };
+    const { user, mail } = await register(req.validated as Credentials);
+    if (mail === 'verification')
+      afterResponse(req, 'email verifikasi', () => sendVerification(user));
+    if (mail === 'account-exists')
+      afterResponse(req, 'pemberitahuan pendaftaran', () => sendAccountExistsNotice(user));
     res.set('Cache-Control', 'no-store');
-    res.json({ user: verifyEmail(token) });
+    res.status(202).json({
+      status: 'accepted',
+      // Fakta konfigurasi, bukan fakta tentang alamat ini.
+      verificationRequired: config.emailVerification.required,
+    });
   });
 
-  // Kirim ulang untuk pengguna yang sedang login (satu email per menit per akun).
-  router.post('/email-verification', requireAuth, async (req: Request, res: Response) => {
-    try {
-      await resendVerification(String(req.user?.sub));
-    } catch (err) {
-      if (err instanceof AppError && err.code === 'VERIFICATION_THROTTLED')
-        res.set(
-          'Retry-After',
-          String((err.details as { retryAfterSeconds: number }).retryAfterSeconds),
-        );
-      throw err;
-    }
-    res.status(202).json({ sent: true });
+  // Tautan di email membawa token di fragment URL; halaman frontend mengirimnya ke
+  // sini BERSAMA password akun. Tautan saja tidak mengaktifkan apa pun.
+  router.post('/verify-email', validate(verifyEmailSchema), async (req: Request, res: Response) => {
+    const { token, password } = req.validated as { token: string; password: string };
+    const user = await verifyEmail(token, password);
+    // Pemilik kotak surat yang tahu password-nya: browser ini boleh masuk walau
+    // email tersebut sedang ditahan backoff login.
+    sendDeviceCookie(req, res, user.id);
+    res.set('Cache-Control', 'no-store');
+    res.json({ user });
   });
 
+  // Lupa password: jawaban sama untuk alamat mana pun; tautan hanya dikirim bila ada akunnya.
+  router.post(
+    '/password-reset',
+    validate(passwordResetRequestSchema),
+    (req: Request, res: Response) => {
+      const { email } = req.validated as { email: string };
+      afterResponse(req, 'email atur ulang password', () => requestPasswordReset(email));
+      res.set('Cache-Control', 'no-store');
+      res.status(202).json({ status: 'accepted' });
+    },
+  );
+
+  // Password baru dari tautan atur ulang. Semua sesi akun berakhir; pengguna masuk lagi.
+  router.post(
+    '/password-reset/confirm',
+    validate(passwordResetConfirmSchema),
+    async (req: Request, res: Response) => {
+      const { token, password } = req.validated as { token: string; password: string };
+      const user = await confirmPasswordReset(token, password);
+      sendDeviceCookie(req, res, user.id);
+      res.set('Cache-Control', 'no-store');
+      res.json({ user });
+    },
+  );
   // Kotak surat pelatihan: hanya ada bila email TIDAK benar-benar dikirim keluar.
   if (config.mail.transport === 'outbox')
     router.get('/admin/outbox', requireAuth, requireAdmin, (req: Request, res: Response) => {
@@ -134,7 +190,7 @@ export function buildRouter(): Router {
   router.post('/login', validate(credentialsSchema), async (req: Request, res: Response) => {
     let user: Awaited<ReturnType<typeof login>>;
     try {
-      user = await login(req.validated as Credentials);
+      user = await login(req.validated as Credentials, readDeviceCookie(req));
     } catch (err) {
       if (err instanceof AppError && err.code === 'LOGIN_THROTTLED')
         res.set(
@@ -144,6 +200,7 @@ export function buildRouter(): Router {
       throw err;
     }
     const session = startSession(user.id);
+    sendDeviceCookie(req, res, user.id);
     sendSession(res, session, accessTokenFor(user.id, session.familyId, session.expiresAt));
   });
 
@@ -209,7 +266,7 @@ export function buildRouter(): Router {
         claims.sub &&
         typeof claims.exp === 'number'
       )
-        endAccessSession(claims.sid);
+        endAccessSession(claims.sid, claims.exp);
     }
     res.clearCookie(config.refresh.cookieName, cookieOptions());
     res.status(204).end();

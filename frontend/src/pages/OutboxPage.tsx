@@ -77,7 +77,9 @@ export function OutboxPage() {
             <p className="text-sm whitespace-pre-line break-words mt-3">{message.text}</p>
             {message.link && /^https?:\/\//i.test(message.link) && (
               <a className="button-primary inline-flex mt-4" href={message.link}>
-                Buka tautan verifikasi
+                {message.link.includes('/reset-password#')
+                  ? 'Buka tautan atur ulang password'
+                  : 'Buka tautan verifikasi'}
               </a>
             )}
           </li>

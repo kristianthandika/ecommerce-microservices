@@ -23,7 +23,7 @@ export function HealthWidget() {
       setUpdatedAt(new Date().toLocaleTimeString('id-ID'));
       timer = setTimeout(tick, POLL_INTERVAL_MS);
     }
-    tick();
+    void tick();
 
     return () => {
       active = false;

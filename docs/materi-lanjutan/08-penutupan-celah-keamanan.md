@@ -27,17 +27,26 @@ Frontend juga menjaga balapan refresh/logout. Respons refresh yang terlambat tid
 
 ## Verifikasi email dan migrasi akun
 
-1. Registrasi menyimpan akun biasa dengan `emailVerified: false` ketika verifikasi diwajibkan.
+1. `POST /auth/register` selalu menjawab `202` dengan isi yang sama, baik alamatnya baru, masih menunggu verifikasi, maupun sudah punya akun. Hasilnya hanya sampai lewat email: tautan verifikasi, atau pemberitahuan kepada pemilik akun yang sudah ada. Pendaftaran karena itu tidak bisa dipakai menebak siapa yang punya akun.
 2. Token acak sekali pakai dikirim melalui email; database verifikasi menyimpan hash, batas waktu, dan pemiliknya. Tautan berlaku 24 jam.
-3. Tautan membawa token pada fragment `/verify-email#token=...`; fragment tidak dikirim sebagai path HTTP. Halaman mengirim token ke `POST /api/v1/auth/verify-email`.
-4. Setelah verifikasi, login atau refresh menerbitkan JWT baru dengan `email_verified: true`. JWT lama yang belum terverifikasi tetap ditolak untuk checkout.
-5. Katalog dan keranjang dapat dipakai sebelum verifikasi; `POST /orders` dan `POST /cart/checkout` menolak dengan 403 `EMAIL_NOT_VERIFIED`.
+3. Tautan membawa token pada fragment `/verify-email#token=...`; fragment tidak dikirim sebagai path HTTP. Halaman meminta password akun, lalu mengirim token dan password ke `POST /api/v1/auth/verify-email`. Tautan saja tidak mengaktifkan apa pun, sehingga pemilik kotak surat tidak bisa mengaktifkan akun yang didaftarkan orang lain dengan password pilihannya. Lima password salah membuat tautan hangus.
+4. Akun baru bisa masuk hanya setelah diverifikasi. Sebelum itu login menjawab persis seperti password salah, dan percobaan itu ikut dihitung sebagai kegagalan.
+5. Mendaftar ulang alamat yang belum diverifikasi mengganti password akun tersebut, jadi orang yang mendaftarkan alamat milik orang lain tidak bisa menghalangi pemiliknya. Akun yang tidak diverifikasi dalam 24 jam dihapus.
+6. `POST /orders` dan `POST /cart/checkout` tetap memeriksa klaim `email_verified` dan menolak dengan 403 `EMAIL_NOT_VERIFIED` sebagai lapis kedua.
 
-Akun biasa lama tanpa flag verifikasi tidak dianggap sudah membuktikan email. Minta pengiriman ulang setelah login. Admin bootstrap dipercaya sebagai akun operator. Tombol kirim ulang memiliki cooldown per akun; endpoint tetap memiliki rate limit. Email yang gagal dikirim tidak membatalkan akun yang telah dibuat, sehingga pengguna dapat mencoba pengiriman ulang setelah login.
+Akun biasa lama tanpa flag verifikasi tidak dianggap sudah membuktikan email dan tidak bisa masuk. Pemiliknya mendaftar ulang dengan alamat yang sama (password lama tidak diganti; ia menerima tautan dan memverifikasi dengan password lamanya) atau memakai **Lupa password**. Admin bootstrap dipercaya sebagai akun operator. Setiap alamat menerima paling banyak satu email per jenis per menit; permintaan berikutnya dilewati tanpa pemberitahuan. Email dikirim setelah respons ditulis, sehingga lamanya respons tidak menunjukkan apakah alamat itu punya akun.
+
+## Lupa password
+
+`POST /auth/password-reset` menjawab `202` yang sama untuk alamat mana pun dan hanya mengirim tautan bila alamat itu punya akun. Tautan berlaku 1 jam dan sekali pakai. `POST /auth/password-reset/confirm` memasang password baru, mengakhiri semua sesi akun, melupakan perangkat yang dikenal, dan menandai akun terverifikasi karena tautan membuktikan penguasaan kotak surat. Ini juga cara pemilik alamat mengambil alih akun yang didaftarkan orang lain dengan alamatnya.
+
+## Backoff login dan device cookie
+
+Backoff per email menghentikan tebakan password, tetapi sendirian ia memberi penyerang cara menahan login korban. Karena itu browser yang pernah berhasil masuk, memverifikasi, atau mengatur ulang password menerima cookie `device_id` (`HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, 90 hari). Permintaan login yang membawa cookie milik akun itu dinilai dengan penghitung cookie tersebut, bukan penghitung bersama per email. Cookie ini bukan kredensial: ia tidak pernah membuat orang masuk, dan hangus setelah lima password salah. Perangkat baru milik korban tetap tertahan selama serangan; jalan keluarnya adalah **Lupa password**, yang memberi browser itu cookie baru.
 
 ## Mode pelatihan dan pengiriman nyata
 
-Compose dasar memilih `MAIL_TRANSPORT=outbox` dan mengaktifkan `MAIL_ALLOW_INSECURE_OUTBOX=true` secara eksplisit. Pesan disimpan sementara, terlihat melalui halaman admin `/admin/outbox`, dan hanya dapat dibaca administrator. Ini kotak surat simulasi: tidak ada email yang dikirim ke alamat sebenarnya. Orang yang dapat membaca kotak surat dapat menggunakan tautan verifikasi; karena itu mode ini hanya untuk kelas/lokal.
+Compose dasar memilih `MAIL_TRANSPORT=outbox` dan mengaktifkan `MAIL_ALLOW_INSECURE_OUTBOX=true` secara eksplisit. Pesan disimpan sementara, terlihat melalui halaman admin `/admin/outbox`, dan hanya dapat dibaca administrator. Ini kotak surat simulasi: tidak ada email yang dikirim ke alamat sebenarnya. Orang yang dapat membaca kotak surat dapat menggunakan tautan atur ulang password di dalamnya dan dengan itu mengambil alih akun mana pun; karena itu mode ini hanya untuk kelas/lokal.
 
 Untuk pengiriman nyata, gunakan relay milik operator yang menerima `POST {to, subject, text}` dan meneruskan email. Konfigurasikan URL HTTPS `MAIL_WEBHOOK_URL`, bearer secret `MAIL_WEBHOOK_TOKEN`, serta `FRONTEND_ORIGIN` HTTPS. Jangan menaruh secret aktual di dokumentasi atau Git. Overlay berikut membuka akses keluar hanya bagi auth-service, mematikan outbox, dan mewajibkan verifikasi:
 
