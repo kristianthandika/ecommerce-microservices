@@ -21,6 +21,10 @@ function makeDouble(name: string, onProducts = false): Server {
     }
     if (onProducts && req.url?.startsWith('/products')) {
       res.setHeader('content-type', 'application/json');
+      // Service di belakang gateway punya bawaan CORS sendiri (origin pengembangan).
+      res.setHeader('access-control-allow-origin', 'http://upstream-default.example');
+      res.setHeader('access-control-allow-credentials', 'true');
+      if (req.url.includes('cacheable')) res.setHeader('cache-control', 'public, max-age=300');
       return res.end(JSON.stringify({ received: req.headers }));
     }
     res.statusCode = 404;
@@ -123,6 +127,51 @@ describe('gateway proxy, correlation & health', () => {
     const internal = await app.inject({ method: 'POST', url: '/internal/reservations/x' });
     expect(internal.statusCode).toBe(404);
     expect(internal.json().error.code).toBe('NOT_FOUND');
+  });
+
+  it('penjaga route internal memakai path yang AKAN dikirim proxy (segmen titik, backslash)', async () => {
+    const { isInternalPath } = await import('../src/app.ts');
+    for (const path of [
+      '/v1/auth/internal/revocations',
+      '/auth/internal/revocations',
+      '/v1/auth/./internal/revocations',
+      '/v1/auth/%2e/internal/revocations',
+      '/v1/auth/%2E/internal/revocations',
+      '/v1/auth/.\\internal/revocations',
+      '/v1/auth/.%2Finternal/revocations',
+      '/v1/auth/x/../internal/revocations',
+      '/v1/auth//internal/revocations',
+      '/v1/auth/%69nternal/revocations?x=1',
+      '/V1/AUTH/INTERNAL',
+    ])
+      expect(isInternalPath(path), path).toBe(true);
+    for (const path of [
+      '/v1/auth/login',
+      '/v1/products?q=internal',
+      '/v1/orders/admin/summary',
+      '/v1/auth/internalx',
+    ])
+      expect(isInternalPath(path), path).toBe(false);
+  });
+
+  it('kebijakan CORS dan cache ditentukan gateway, bukan bawaan service di belakangnya', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/products',
+      headers: { origin: 'http://localhost:5173' },
+    });
+    expect(res.statusCode).toBe(200);
+    // Origin milik gateway (CORS_ORIGIN), bukan yang dikirim upstream.
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+    // Respons tanpa cache-control tidak boleh tersimpan di browser/proxy.
+    expect(res.headers['cache-control']).toBe('no-store');
+    // Service yang menyatakan sendiri boleh di-cache tetap dihormati.
+    const cacheable = await app.inject({ method: 'GET', url: '/v1/products?cacheable=1' });
+    expect(cacheable.headers['cache-control']).toBe('public, max-age=300');
+  });
+
+  it('batas waktu request aktif (bawaan Fastify: tanpa batas)', () => {
+    expect(app.server.requestTimeout).toBe(15_000);
   });
 
   it('security header (helmet) muncul di response gateway', async () => {

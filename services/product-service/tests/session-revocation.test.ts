@@ -65,4 +65,17 @@ describe('revoked sessions', () => {
     expect(refused.body.error.code).toBe('SESSION_REVOKED');
     expect((await summary(randomUUID())).status).toBe(200);
   });
+
+  it('keeps working when many sessions were revoked (a list larger than 1 MiB)', async () => {
+    // A busy hour of logouts, or a login/logout flood, must not lock everybody out.
+    const target = randomUUID();
+    revoked.push(target, ...Array.from({ length: 20_000 }, () => randomUUID()));
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const summary = (sid: string) =>
+      request(app)
+        .get('/products/admin/summary')
+        .set('authorization', `Bearer ${admin(sid)}`);
+    expect((await summary(randomUUID())).status).toBe(200);
+    expect((await summary(target)).body.error.code).toBe('SESSION_REVOKED');
+  });
 });

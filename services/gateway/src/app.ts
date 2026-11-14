@@ -11,7 +11,7 @@ import rateLimit from '@fastify/rate-limit';
 import httpProxy from '@fastify/http-proxy';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { createLogger, CORRELATION_ID_HEADER } from '@ecommerce/logger';
 import { config } from './config.ts';
 import { attachCorrelation } from './correlation.ts';
@@ -45,16 +45,57 @@ function upstreamFailure(
  * penjaga ini route internal auth-service ikut terbuka. Path di-decode dulu dan
  * dicocokkan tanpa peduli huruf besar/kecil, karena router Express di belakang juga
  * tidak membedakannya. Service token tetap menjadi lapis kedua.
+ *
+ * Yang dicocokkan adalah path yang AKAN DIKIRIM, bukan hanya yang diterima: proxy
+ * membentuk URL upstream lewat parser URL WHATWG, yang membuang segmen titik dan
+ * menganggap `\` sebagai `/`. Tanpa normalisasi yang sama, `/auth/./internal/...`,
+ * `/auth/%2e/internal/...` dan `/auth/.\internal/...` lolos dari penjaga ini lalu
+ * tiba di upstream sebagai `/internal/...`.
  */
-export function isInternalPath(url: string): boolean {
-  const path = url.split('?')[0];
-  let decoded = path;
+const INTERNAL_PATH = /^\/+(?:v1\/+)?[^/]+\/+internal(?:\/|$)/i;
+
+function decodePath(path: string): string {
   try {
-    decoded = decodeURIComponent(path);
+    return decodeURIComponent(path);
   } catch {
     // Escape yang rusak dicocokkan apa adanya; upstream akan menolaknya.
+    return path;
   }
-  return /^\/+(?:v1\/+)?[^/]+\/+internal(?:\/|$)/i.test(decoded);
+}
+
+/** Path seperti yang dihasilkan parser URL (segmen titik hilang, `\` menjadi `/`). */
+function normalizePath(path: string): string | undefined {
+  try {
+    // Satu garis miring di depan: `//host/...` tidak boleh terbaca sebagai nama host.
+    return new URL(path.replace(/^[/\\]+/, '/'), 'http://gateway.invalid').pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isInternalPath(url: string): boolean {
+  const path = url.split('?')[0];
+  const decoded = decodePath(path);
+  // Ditolak bila SALAH SATU tafsiran menunjuk route internal: apa adanya, setelah
+  // dinormalisasi, atau di-decode dulu baru dinormalisasi (mis. `.%2Finternal`).
+  return [decoded, normalizePath(path), normalizePath(decoded)].some(
+    (candidate) => candidate !== undefined && INTERNAL_PATH.test(decodePath(candidate)),
+  );
+}
+
+/**
+ * Header respons upstream sebelum sampai ke klien. Gateway adalah satu-satunya
+ * pemegang kebijakan CORS: header `access-control-*` dari service di belakangnya
+ * dibuang, karena nilai bawaan service (origin pengembangan) akan menimpa kebijakan
+ * gateway. Respons tanpa `cache-control` dianggap data pengguna dan tidak boleh
+ * disimpan browser/proxy; service yang memang boleh di-cache (JWKS) menyatakannya sendiri.
+ */
+export function edgeResponseHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
+  const result: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers))
+    if (!name.toLowerCase().startsWith('access-control-')) result[name] = value;
+  result['cache-control'] ??= 'no-store';
+  return result;
 }
 
 /**
@@ -82,13 +123,19 @@ export async function buildApp({
     },
     // Trust forwarded IPs only from explicitly configured frontend proxy addresses.
     trustProxy: process.env.TRUSTED_PROXY_CIDR?.split(',') ?? false,
+    // Bawaan Fastify adalah 0 (tanpa batas): klien yang mengirim body sedikit demi
+    // sedikit bisa menahan koneksi selamanya. Sama dengan batas service di belakangnya.
+    requestTimeout: config.requestTimeoutMs,
   });
 
-  app.setErrorHandler<{ statusCode?: number; message: string }>((error, _request, reply) => {
+  app.setErrorHandler<{ statusCode?: number; message: string }>((error, request, reply) => {
     const status =
       error.statusCode && error.statusCode >= 400 && error.statusCode < 600
         ? error.statusCode
         : 500;
+    // Error handler kustom menggantikan pencatatan bawaan Fastify; tanpa baris ini
+    // penyebab 5xx di gateway tidak pernah muncul di log.
+    request.log[status >= 500 ? 'error' : 'warn']({ err: error }, 'request gagal');
     reply.code(status).send({
       error: {
         message: status >= 500 ? 'Layanan sementara tidak tersedia' : error.message,
@@ -155,7 +202,18 @@ export async function buildApp({
     { prefix: '/orders', upstream: config.services.order, rewritePrefix: '/orders' },
     { prefix: '/cart', upstream: config.services.order, rewritePrefix: '/cart' },
   ];
-  const replyOptions = { onError: upstreamFailure };
+  const proxyOptions = {
+    replyOptions: { onError: upstreamFailure, rewriteHeaders: edgeResponseHeaders },
+    undici: {
+      // Upstream yang menggantung dilepas (504), bukan menahan koneksi gateway
+      // selama bawaan undici (5 menit).
+      headersTimeout: config.upstreamTimeoutMs,
+      bodyTimeout: config.upstreamTimeoutMs,
+      // Bawaan @fastify/reply-from TIDAK memverifikasi sertifikat upstream HTTPS
+      // (`tls.rejectUnauthorized = false`); `connect` menimpanya di undici.
+      connect: { rejectUnauthorized: true },
+    },
+  };
   const openapi = readFileSync(new URL('../openapi.json', import.meta.url), 'utf8');
 
   // Versi saat ini: /v1/... (publik: /api/v1/...).
@@ -166,7 +224,7 @@ export async function buildApp({
       v1.get('/openapi.json', async (_request, reply) =>
         reply.type('application/json').header('cache-control', 'public, max-age=300').send(openapi),
       );
-      for (const route of routes) await v1.register(httpProxy, { ...route, replyOptions });
+      for (const route of routes) await v1.register(httpProxy, { ...route, ...proxyOptions });
     },
     { prefix: '/v1' },
   );
@@ -192,7 +250,8 @@ export async function buildApp({
         // Siapa yang masih memakai jalur lama menentukan kapan aman dimatikan.
         request.log.info({ legacyPath: request.routeOptions.url }, 'jalur API tanpa versi');
       });
-      for (const route of routes) await unversioned.register(httpProxy, { ...route, replyOptions });
+      for (const route of routes)
+        await unversioned.register(httpProxy, { ...route, ...proxyOptions });
     });
   }
 

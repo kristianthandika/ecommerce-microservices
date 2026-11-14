@@ -17,6 +17,9 @@ export const config = {
     timeWindow: process.env.GATEWAY_RATE_LIMIT_WINDOW || '1 minute',
   },
   healthTimeoutMs: Number(process.env.HEALTH_TIMEOUT_MS || 1000),
+  // Batas menerima satu request utuh dari klien, dan batas menunggu jawaban upstream.
+  requestTimeoutMs: Number(process.env.GATEWAY_REQUEST_TIMEOUT_MS || 15_000),
+  upstreamTimeoutMs: Number(process.env.GATEWAY_UPSTREAM_TIMEOUT_MS || 15_000),
   api: {
     // Prefix publik di depan gateway (nginx/Vite memotongnya sebelum meneruskan).
     // Dipakai untuk header Link yang menunjuk ke versi pengganti.
@@ -35,6 +38,8 @@ export const config = {
 for (const [name, value, max] of [
   ['GATEWAY_RATE_LIMIT_MAX', config.rateLimit.max, 1_000_000],
   ['HEALTH_TIMEOUT_MS', config.healthTimeoutMs, 60_000],
+  ['GATEWAY_REQUEST_TIMEOUT_MS', config.requestTimeoutMs, 300_000],
+  ['GATEWAY_UPSTREAM_TIMEOUT_MS', config.upstreamTimeoutMs, 300_000],
   ['PORT', config.port, 65_535],
 ] as const) {
   if (!Number.isInteger(value) || value < 1 || value > max)

@@ -91,6 +91,22 @@ describe('product-service distributed auth & RBAC', () => {
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('request cacat sebelum route (URL/encoding rusak) → 4xx, bukan 500', async () => {
+    // Percent-encoding yang tidak bisa di-decode: Express melempar URIError ber-status 400.
+    const badPath = await request(app).get('/products/%E0%A4%A');
+    expect(badPath.status).toBe(400);
+    expect(badPath.body.error).toEqual({ message: 'Request tidak valid', code: 'BAD_REQUEST' });
+
+    const badEncoding = await request(app)
+      .post('/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'x-unknown')
+      .send('{"name":"Produk","price":1000}');
+    expect(badEncoding.status).toBe(415);
+    expect(badEncoding.body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+  });
+
   it('nama produk berisi spasi saja → 400, dan nama valid di-trim', async () => {
     const blank = await request(app)
       .post('/products')

@@ -1,5 +1,13 @@
 import { AppError } from './errors.ts';
 
+/**
+ * Upper bound of one snapshot. It must cover the largest list the caller accepts
+ * (100,000 sessions at roughly 70 bytes each): a smaller limit turns a busy hour of
+ * logouts, or a login/logout flood from a handful of addresses, into 503 for every
+ * signed-in user, because an unreadable list fails closed.
+ */
+export const MAX_SNAPSHOT_BYTES = 8 * 1_048_576;
+
 /** Fixed operator URL, no redirects, bounded body and deadline including its stream. */
 export async function fetchRevocationSnapshot(url: string, serviceToken: string): Promise<unknown> {
   const response = await fetch(url, {
@@ -20,7 +28,7 @@ export async function fetchRevocationSnapshot(url: string, serviceToken: string)
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > 1_048_576) throw new Error('Revocation snapshot exceeds size limit');
+      if (bytes > MAX_SNAPSHOT_BYTES) throw new Error('Revocation snapshot exceeds size limit');
       chunks.push(value);
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
