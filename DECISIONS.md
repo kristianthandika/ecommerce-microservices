@@ -109,7 +109,7 @@ merapikan" — browser akan kehilangan ACAO pada request lewat gateway.
   tanpa itu. Berlaku juga untuk email tak terdaftar (anti-enumerasi).
 - **Concurrency keranjang via `If-Match`/`ETag`** — mekanisme standar HTTP;
   body pada `DELETE` tidak punya arti baku dan bisa dibuang proxy. Body
-  `version` diterima sementara dengan `Deprecation: true`.
+  `version` diterima sementara dengan header `Deprecation` (RFC 9745).
 - **Pembatalan sebagai saga** — niat disimpan durable lebih dulu, pelepasan stok
   idempotent, tombstone untuk reservasi yang masih di jalan. Tidak memakai
   two-phase commit/event bus: recovery worker yang sudah ada cukup untuk satu
@@ -119,8 +119,42 @@ merapikan" — browser akan kehilangan ACAO pada request lewat gateway.
 - **Migrasi skema bertahap di storage** — daftar migrasi berurutan, tiap langkah
   satu transaksi, backup `VACUUM INTO` sebelum migrasi data lama.
 - **Root filesystem read-only** untuk semua container; tmpfs dibatasi ukurannya.
-- **Ditunda dengan sengaja**: tabel relasional (menunggu pengukuran), OpenAPI dan
-  versi API, batas stok per pengguna (butuh keputusan bisnis).
+- **Ditunda lalu dikerjakan (14 November 2026)**: tabel relasional, OpenAPI dan
+  versi API, batas stok per pengguna. Lihat bagian berikut.
+
+## Keputusan lanjutan: storage relasional, API6, API9 (14 November 2026)
+
+- **Tabel relasional di SQLite yang sama, bukan PostgreSQL** — satu file per service
+  tetap cukup untuk satu host; yang lambat adalah membaca semua blob lalu memfilter
+  di JavaScript, bukan SQLite-nya. Kolom untuk yang difilter/diurutkan/diagregasi,
+  JSON `details` untuk sisanya (snapshot item, alamat) supaya skema tidak meledak
+  menjadi banyak tabel kecil. Kolom adalah sumber kebenaran; `details` tidak
+  menyalinnya. Receipt reservasi tetap key/value karena hanya dibaca per ID.
+- **Migrasi bernama per service (`schema_migrations`)** — `user_version` tetap untuk
+  migrasi inti paket storage; tiap service punya daftar migrasi bernama sendiri.
+  Satu angka versi bersama tidak bisa dipakai dua service yang skemanya berbeda.
+  Build lama menolak database yang memuat migrasi yang tidak ia kenal.
+- **Offset tetap ada, cursor ditambahkan** — UI memakai halaman bernomor dengan
+  total, jadi offset dipertahankan tetapi dibatasi 10.000. Cursor keyset untuk klien
+  API dan halaman dalam. Katalog produk tetap offset: kecil dan dikurasi admin.
+- **Batas tahan stok 5 pesanan aktif / 10 unit per produk** — nilai awal untuk toko
+  merchandise pelatihan; bisa diubah lewat env tanpa rilis. Dihitung dari pesanan
+  aktif (bukan per request) karena yang disalahgunakan adalah stok yang ditahan.
+  Diperiksa di transaksi pembuatan order supaya request paralel tidak lolos; retry
+  dengan key yang sama dijawab lebih dulu supaya tidak pernah ditolak.
+- **Tidak ada batas registrasi per jam per IP** — peserta satu kelas berbagi satu IP
+  publik; batas seperti itu memblokir pengguna sah. Anti-otomasi yang tepat (CAPTCHA,
+  verifikasi email) butuh layanan pihak ketiga dan dicatat sebagai celah.
+- **Versi di path (`/api/v1`), bukan header** — terlihat di log, mudah di-cache, dan
+  mudah dicoba dari browser. Jalur lama dipertahankan sebagai alias dengan
+  `Deprecation`/`Sunset`/`Link` alih-alih langsung dimatikan. Cookie refresh pindah ke
+  `Path=/api/v1/auth`; endpoint refresh baru diperkenalkan di rilis yang sama, jadi
+  tidak ada klien lama yang bergantung pada path cookie lama.
+- **OpenAPI dibangkitkan dari zod, bukan ditulis tangan** — skema request diambil dari
+  objek yang sama dengan yang memvalidasi request, sehingga dokumen tidak bisa
+  menyimpang diam-diam. Skema request dipindah ke `schemas.ts` tiap service agar bisa
+  diimpor tanpa membuka database. Skema respons ditulis di generator dan dibuktikan
+  terhadap respons nyata oleh E2E.
 
 ## Catatan lain
 

@@ -11,6 +11,6 @@ Sebelum melayani pelanggan nyata:
 - Jadwalkan backup ke lokasi di luar host, sertakan signing key, dan latih restore serta rekonsiliasi lintas service.
 - Tambahkan metrics, alert, tracing seluruh hop, dan image scanning. Audit npm pada sesi perbaikan sudah bersih; hasil ini bukan jaminan seluruh image OS bebas kerentanan.
 - Implementasikan pembayaran/pengiriman/refund dengan state machine dan kompensasi, mengikuti pola saga pembatalan yang sudah ada. Workflow saat ini mengalokasikan dan dapat melepas stok, tetapi belum menagih.
-- Tambahkan batas stok yang ditahan per pengguna dan anti-otomasi registrasi (OWASP API6), serta spesifikasi OpenAPI dan versi API (OWASP API9). Lihat [OWASP-API-SECURITY.md](OWASP-API-SECURITY.md).
+- Tetapkan batas tahan stok sesuai kebijakan bisnis (`ORDER_MAX_OPEN_ORDERS`, `ORDER_MAX_UNITS_PER_PRODUCT`) dan tambahkan anti-otomasi registrasi seperti CAPTCHA atau verifikasi email (OWASP API6). Pantau log `jalur API tanpa versi` dan matikan alias lama (`LEGACY_API_ENABLED=false`) setelah tidak dipakai, paling lambat tanggal `LEGACY_API_SUNSET` (OWASP API9). Lihat [OWASP-API-SECURITY.md](OWASP-API-SECURITY.md).
 - Konfigurasikan registry, deployment target, approval organisasi, dan jalankan workflow CI di hosting GitHub. Workflow lokal sudah tersedia; publishing/deployment belum dilakukan.
 - Lengkapi load test representatif dan browser E2E di runner yang mendukung browser. Tes component dan API E2E lokal sudah dijalankan; akses Firefox interaktif pada mesin ini diblokir oleh alat computer-use.

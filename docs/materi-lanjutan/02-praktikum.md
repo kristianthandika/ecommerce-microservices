@@ -32,7 +32,7 @@ Untuk setiap latihan, simpan hasil pengamatan: langkah, ID produk/order yang rel
 Jalankan satu kali dan lanjutkan latihan pada terminal yang sama:
 
 ```powershell
-$apiBase = 'http://127.0.0.1:3000/api'
+$apiBase = 'http://127.0.0.1:3000/api/v1'
 $labRun = [guid]::NewGuid().ToString('N').Substring(0, 8)
 $labEmail = "peserta-$labRun@example.test"
 $labPassword = 'Latihan-Only-2026!'
@@ -282,7 +282,7 @@ $checkoutResult.order | Select-Object id, status, fulfillmentStatus, total
 Contoh berikut menggunakan Bash, bukan alias curl milik Windows PowerShell. Ganti placeholder secara lokal dan jangan commit token yang telah diisi.
 
 ```bash
-API_BASE='http://127.0.0.1:3000/api'
+API_BASE='http://127.0.0.1:3000/api/v1'
 BUYER_TOKEN='<TOKEN_HASIL_LOGIN>'
 PRODUCT_ID='<UUID_PRODUK_AKTUAL>'
 CART_VERSION='<UUID_VERSI_AKTUAL>'
@@ -291,7 +291,8 @@ curl -sS "$API_BASE/cart" -H "Authorization: Bearer $BUYER_TOKEN"
 curl -sS -X PUT "$API_BASE/cart/items/$PRODUCT_ID" \
   -H "Authorization: Bearer $BUYER_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data "{\"quantity\":2,\"version\":\"$CART_VERSION\"}"
+  -H "If-Match: \"$CART_VERSION\"" \
+  --data '{"quantity":2}'
 ```
 
 Gunakan GET ulang untuk quote dan version terbaru sebelum checkout. Referensi seluruh payload tersedia pada [referensi API](03-referensi-api.md).

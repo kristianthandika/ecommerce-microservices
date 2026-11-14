@@ -2,7 +2,7 @@
 
 Dokumen ini memetakan setiap risiko [OWASP API Security Top 10 — 2023](https://owasp.org/API-Security/editions/2023/en/0x11-t10/) ke kontrol yang ada di kode, tempat kontrol itu berada, dan pengujian yang membuktikannya berjalan. Celah yang masih terbuka ditulis apa adanya.
 
-Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeriksaan di [`scripts/e2e.mjs`](../scripts/e2e.mjs) yang dijalankan terhadap stack Docker nyata melalui nginx dan gateway.
+Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" mengacu pada nama pemeriksaan di [`scripts/e2e.mjs`](../scripts/e2e.mjs) yang dijalankan terhadap stack Docker nyata melalui nginx dan gateway.
 
 ## Ringkasan
 
@@ -11,12 +11,12 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 | API1 Broken Object Level Authorization               | Terpenuhi | Kepemilikan dari klaim `sub` JWT; order orang lain dijawab 404                 |
 | API2 Broken Authentication                           | Sebagian  | RS256 + JWKS, access token 15 menit, refresh token berotasi, backoff per akun  |
 | API3 Broken Object Property Level Authorization      | Terpenuhi | Skema zod membuang field tak dikenal; respons dipetakan ke bentuk publik       |
-| API4 Unrestricted Resource Consumption               | Sebagian  | Rate limit berlapis, batas body/halaman/item, timeout, batas memori container  |
+| API4 Unrestricted Resource Consumption               | Terpenuhi | Rate limit berlapis, batas body/halaman/offset, query SQL berindeks, timeout   |
 | API5 Broken Function Level Authorization             | Terpenuhi | `requireRole`/`requireAdmin` di server; route internal butuh service token     |
-| API6 Unrestricted Access to Sensitive Business Flows | Sebagian  | Idempotensi, reservasi stok atomik, batas jumlah; belum ada batas per pengguna |
+| API6 Unrestricted Access to Sensitive Business Flows | Sebagian  | Idempotensi, stok atomik, batas tahan per pelanggan; registrasi belum dibatasi |
 | API7 Server Side Request Forgery                     | Terpenuhi | Tidak ada URL dari pengguna; ID divalidasi UUID dan di-encode                  |
 | API8 Security Misconfiguration                       | Terpenuhi | Header keamanan, CORS allowlist, error generik, container non-root read-only   |
-| API9 Improper Inventory Management                   | Sebagian  | Referensi API manual, gateway allowlist prefix; belum ada OpenAPI/versi        |
+| API9 Improper Inventory Management                   | Terpenuhi | OpenAPI 3.1 dari skema zod, `/api/v1`, alias lama dengan Deprecation/Sunset    |
 | API10 Unsafe Consumption of APIs                     | Terpenuhi | Respons upstream divalidasi skema dan aritmetikanya diperiksa ulang            |
 
 "Terpenuhi" berarti kontrol yang relevan untuk fitur yang ada sudah diterapkan dan diuji, bukan bahwa risikonya nol.
@@ -41,7 +41,7 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 
 - JWT RS256; verifikasi mengunci algoritme, `iss`, `aud`, `sub`, dan `exp`: [`require-auth.ts`](../services/product-service/src/middleware/require-auth.ts). Token dengan `alg` selain RS256 atau `kid` tidak valid ditolak sebelum mencari key.
 - Kunci publik diambil dari JWKS dengan cache dan cooldown; `kid` palsu tidak bisa menghabiskan kuota fetch: [`signing-keys.ts`](../services/product-service/src/middleware/signing-keys.ts).
-- Access token 15 menit. Refresh token opaque disimpan sebagai hash SHA-256, dikirim sebagai cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/auth`, dirotasi setiap dipakai. Pemakaian ulang token yang sudah dirotasi mencabut seluruh sesi: [`sessions.ts` `rotateSession`](../services/auth-service/src/sessions.ts).
+- Access token 15 menit. Refresh token opaque disimpan sebagai hash SHA-256, dikirim sebagai cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, dirotasi setiap dipakai. Pemakaian ulang token yang sudah dirotasi mencabut seluruh sesi: [`sessions.ts` `rotateSession`](../services/auth-service/src/sessions.ts).
 - Logout mencabut sesi di server. Endpoint cookie dilindungi CSRF tiga lapis (SameSite, header kustom, allowlist Origin): [`routes.ts` `requireSameSiteRequest`](../services/auth-service/src/routes.ts).
 - Login: bcrypt dengan hash umpan untuk email tak dikenal (waktu respons seragam), batas 72 byte, limit per IP 20/menit, dan backoff eksponensial per akun setelah 5 kegagalan, termasuk untuk email yang tidak terdaftar: [`sessions.ts` `assertLoginAllowed`](../services/auth-service/src/sessions.ts).
 - Access token hanya di memory frontend, tidak di `localStorage`.
@@ -77,7 +77,8 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 
 - Rate limit berlapis: gateway 100/menit/IP ([`app.ts`](../services/gateway/src/app.ts)), backstop per service 300/menit/IP, login/register 20/menit/IP, refresh/logout 60/menit/IP. Panggilan antar-service dikecualikan hanya bila membawa service token valid.
 - Ukuran: body 100 KB di service dan nginx, respons upstream maksimal 1 MiB ([`resilient-http-client`](../packages/resilient-http-client/src/index.ts)).
-- Jumlah: halaman maksimal 100, 50 produk per order/keranjang, kuantitas 1–1000, pencarian 100 karakter ([`schemas.ts`](../services/order-service/src/schemas.ts)).
+- Jumlah: halaman maksimal 100, `offset` maksimal 10.000 (lebih dalam memakai `cursor`), 50 produk per order/keranjang, kuantitas 1–1000, pencarian 100 karakter ([`schemas.ts`](../services/order-service/src/schemas.ts)).
+- Biaya query: order dan produk disimpan di tabel relasional berindeks ([`order-service/src/migrations.ts`](../services/order-service/src/migrations.ts), [`product-service/src/migrations.ts`](../services/product-service/src/migrations.ts)). Daftar, ringkasan admin, dan antrean recovery dijawab SQL dengan `LIMIT`, bukan dengan membaca semua baris lalu memfilter di memory. Pagination keyset (`cursor`) tidak melewati atau menggandakan baris saat order baru masuk.
 - Waktu: timeout per percobaan dan total, `requestTimeout` server 15 detik, maksimal 32 operasi reservasi/pelepasan aktif per proses.
 - Retensi: Idempotency-Key, refresh token, dan penghitung gagal login dihapus terjadwal, sehingga tabel tidak tumbuh tanpa batas.
 - Container: `mem_limit` 512 MB, `cpus` 1, `pids_limit` 128, tmpfs dibatasi 64 MB.
@@ -85,9 +86,10 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 **Bukti uji.**
 
 - Unit: `gateway.test.ts` › _rate-limit exhaustion returns a consistent 429_; `rate-limit.test.ts`; `auth.test.ts` › _maps malformed JSON to 400 and oversized payloads to 413_; `cart-cancel.test.ts` › _forgets keys of settled orders after the retention window…_.
+- Unit: `orders-relational.test.ts` › _answers list, recovery and admin queries from indexes_ (memeriksa `EXPLAIN QUERY PLAN`), _pages with a keyset cursor that neither repeats nor skips…_, _rejects malformed cursors and unbounded offsets_; `catalogue-sql.test.ts`.
 - E2E: _cart catalog reads for all users are not throttled as one client_, _305 health polls do not exhaust business or health quotas_, `GET /products?limit=1000` → 400.
 
-**Celah.** Daftar order dan produk dibaca penuh dari SQLite lalu difilter di memory, sehingga biaya per request tumbuh linear dengan jumlah data. Rencana perbaikannya (tabel relasional + indeks + cursor) ada di [HARDENING.md](HARDENING.md).
+**Celah.** Pencarian nama memakai `instr(lower(...))`, yang memindai tabel. Untuk katalog ribuan baris ini cukup; untuk lebih besar pakai FTS5. `total` pada daftar dihitung dengan `count(*)` per request.
 
 ## API5 — Broken Function Level Authorization
 
@@ -106,20 +108,28 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 
 **Kontrol.**
 
-- Checkout: Idempotency-Key wajib, satu snapshot keranjang menghasilkan paling banyak satu order, reservasi stok atomik tanpa overselling.
+- Checkout: Idempotency-Key wajib, satu snapshot keranjang menghasilkan paling banyak satu order, reservasi stok atomik tanpa overselling. Database menolak stok negatif (`CHECK (stock >= 0)`) sebagai pengaman kedua.
+- Batas tahan per pelanggan: paling banyak `ORDER_MAX_OPEN_ORDERS` (bawaan 5) pesanan aktif dan `ORDER_MAX_UNITS_PER_PRODUCT` (bawaan 10) unit per produk di seluruh pesanan aktif. "Aktif" berarti PENDING atau CONFIRMED yang belum COMPLETED; pesanan yang dibatalkan atau selesai mengembalikan jatah. Penolakan: `409 HOLD_LIMIT_EXCEEDED` dengan `details` (`limit`, `held`, `requested`). Pemeriksaan berjalan di transaksi yang sama dengan pembuatan order, jadi request paralel tidak bisa menembusnya. Retry dengan Idempotency-Key yang sudah dikenal tidak pernah ditolak oleh batas ini: [`orders.ts` `assertWithinHoldLimit`](../services/order-service/src/orders.ts).
 - Batas per request: kuantitas maksimal 1000 per produk dan 50 produk per order.
 - Pembatalan oleh admin dapat mengembalikan stok yang ditahan pemesanan berlebihan.
 - Login berulang dari banyak IP terhadap satu akun diperlambat per akun.
 
-**Bukti uji.** E2E _concurrent distinct orders never oversell remaining stock_, _concurrent same-key requests produce one order and one stock deduction_; shopping E2E _one cart snapshot produces one order across concurrent different keys_.
+**Bukti uji.**
 
-**Celah.** Aplikasi belum memiliki pembayaran, jadi konfirmasi order langsung menahan stok. Satu akun (atau banyak akun hasil registrasi otomatis) dapat menahan seluruh stok. Mitigasi yang dianjurkan: batas unit yang ditahan per pengguna, kedaluwarsa otomatis untuk order yang belum dibayar setelah pembayaran ada, dan anti-otomasi (CAPTCHA atau verifikasi email) pada registrasi.
+- Unit: `orders-relational.test.ts` › _caps the units of one product a customer holds in open orders_, _caps the number of open orders per customer_, _cannot be bypassed with parallel requests_; `catalogue-sql.test.ts` › _refuses negative stock at the database level_; `order.test.tsx` › _reports a hold-limit refusal as a definite answer…_.
+- E2E: _UUID validation, required key and per-customer hold limit_ (dua baris 6 unit dijumlahkan menjadi 12 → `HOLD_LIMIT_EXCEEDED`), _concurrent distinct orders never oversell remaining stock_, _concurrent same-key requests produce one order and one stock deduction_; shopping E2E _one cart snapshot produces one order across concurrent different keys_.
+
+**Celah.**
+
+- Batas tahan berlaku per akun. Banyak akun hasil registrasi otomatis tetap bisa menahan stok bersama-sama. Registrasi hanya dibatasi 20/menit/IP (bersama login). Batas per jam per IP sengaja tidak dipasang karena peserta satu ruang kelas atau kantor berbagi satu IP publik. Mitigasi yang tepat (CAPTCHA, verifikasi email) membutuhkan layanan pihak ketiga.
+- Belum ada pembayaran, sehingga belum ada kedaluwarsa otomatis untuk pesanan yang tidak dibayar.
+- Nilai bawaan 5 pesanan / 10 unit adalah keputusan bisnis yang bisa diubah lewat environment.
 
 ## API7 — Server Side Request Forgery
 
 **Kontrol.** Tidak ada fitur yang mengambil URL dari pengguna. URL service lain berasal dari environment. ID yang disisipkan ke path upstream divalidasi sebagai UUID lalu di-`encodeURIComponent` ([`product-client.ts:34`](../services/order-service/src/product-client.ts#L34)). Lokasi JWKS tetap dari konfigurasi; header JWT seperti `jku`/`x5u` tidak dipakai untuk mengambil kunci.
 
-**Bukti uji.** E2E _UUID validation, required key and duplicate-line stock checks_ (`productId: '../health'` → 400).
+**Bukti uji.** E2E _UUID validation, required key and per-customer hold limit_ (`productId: '../health'` → 400).
 
 ## API8 — Security Misconfiguration
 
@@ -141,9 +151,20 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 
 ## API9 — Improper Inventory Management
 
-**Kontrol.** Seluruh endpoint publik dan internal didokumentasikan di [referensi API](materi-lanjutan/03-referensi-api.md). Gateway memakai allowlist prefix, sehingga route internal tidak terekspos. Jalur lama (`version` di body keranjang) masih diterima tetapi ditandai header `Deprecation: true`.
+**Kontrol.**
 
-**Celah.** Belum ada spesifikasi OpenAPI yang dapat dibaca mesin, belum ada versi API di path atau header, belum ada tanggal sunset untuk jalur deprecated, dan belum ada tes otomatis yang membandingkan route di kode dengan dokumentasi. Ini prioritas berikutnya karena spesifikasi juga diperlukan untuk DAST yang efektif.
+- Spesifikasi OpenAPI 3.1 yang dapat dibaca mesin: [`services/gateway/openapi.json`](../services/gateway/openapi.json), disajikan di `GET /api/v1/openapi.json`. Skema request dibangkitkan dari skema zod yang dipakai service untuk validasi ([`scripts/openapi.mjs`](../scripts/openapi.mjs)), jadi dokumen tidak bisa berbeda dari validasi sebenarnya. CI menjalankan `npm run openapi:check` dan gagal bila file tertinggal dari kode.
+- Tes cakupan dua arah di setiap service (`openapi-coverage.test.ts`): setiap route yang diteruskan gateway harus ada di spesifikasi, dan setiap path di spesifikasi harus benar-benar diimplementasikan. Route internal dan `/health` milik service dinyatakan tidak publik secara eksplisit.
+- Versi di path: `/api/v1/...` adalah versi saat ini. Jalur tanpa versi (`/api/...`) tetap dilayani dengan header `Deprecation: @<epoch>` (RFC 9745), `Sunset` 14 Mei 2027 (RFC 8594), dan `Link: </api/v1/...>; rel="successor-version"`. Gateway mencatat setiap pemakaian jalur lama di log, sehingga pemiliknya bisa melihat kapan alias aman dimatikan (`LEGACY_API_ENABLED=false`). Versi yang tidak dikenal (`/api/v2/...`) dijawab 404.
+- `version` di body keranjang (jalur sebelum If-Match) juga diberi header `Deprecation` dengan format yang sama.
+- Gateway memakai allowlist prefix, sehingga route internal tidak terekspos.
+
+**Bukti uji.**
+
+- Unit: `versioning.test.ts` (gateway: routing `/v1`, header jalur lama, 404 untuk versi tak dikenal, semua `$ref` ter-resolve, parameter path lengkap, `operationId` unik, tidak ada `/internal`); `openapi-coverage.test.ts` di auth-, product-, dan order-service.
+- E2E: _responses match the published OpenAPI contract_ (respons nyata dari stack Docker divalidasi terhadap skema respons yang sama dengan yang diterbitkan), _unversioned paths still work but announce their successor and sunset_. Suite belanja sengaja tetap memakai jalur tanpa versi dan body `version`, sebagai uji kompatibilitas mundur.
+
+**Celah.** Spesifikasi belum divalidasi dengan linter OpenAPI eksternal (mis. `npx @redocly/cli lint services/gateway/openapi.json`); pemeriksaan struktural dilakukan oleh tes sendiri. Skema respons ditulis di generator, bukan diturunkan dari kode, tetapi diuji terhadap respons nyata di E2E.
 
 ## API10 — Unsafe Consumption of APIs
 
@@ -160,4 +181,4 @@ Status per 14 November 2026, cabang `main`. Bukti "E2E" mengacu pada nama pemeri
 
 Sebelum dokumen ini, materi e-commerce (modul PDF, `docs/materi-lanjutan`, `docs/exercises`) tidak menyebut OWASP API Security sama sekali. Kontrol seperti RBAC, rate limit, dan helmet sudah diajarkan, tetapi tidak dikaitkan dengan kategori risikonya, dan BOLA, property-level authorization, inventory, serta unsafe consumption tidak dibahas secara eksplisit. Satu-satunya rujukan OWASP di workspace berada di modul lain (Trello Board, OWASP Top 10 untuk aplikasi web).
 
-Materi pendamping dengan latihan per risiko: [Modul 7 — Keamanan API (OWASP)](materi-lanjutan/07-keamanan-api-owasp.md).
+Materi pendamping dengan latihan per risiko: [Modul 7 — Keamanan API (OWASP)](materi-lanjutan/07-keamanan-api-owasp.md). Latihan membangun kontrolnya sendiri (pasangan branch `starter/m12.x` dan `solution/m12.x`) ada di [docs/exercises](exercises/README.md).

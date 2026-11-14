@@ -42,6 +42,9 @@ Jika modul lama dan baru digabungkan sebagai satu implementasi terkini, revisi k
 16. **Keranjang mengirim `version` di body** → mutasi keranjang memakai `If-Match`/`ETag`; konflik 412, tanpa precondition 428. Body `version` masih diterima sementara (deprecated, konflik 409).
 17. **Pembatalan belum ada** → pembatalan tersedia sebagai saga dengan kompensasi; stok dikembalikan tepat sekali.
 18. **Keamanan cukup dijelaskan dengan helmet/CORS/rate limit** → petakan ke OWASP API Security Top 10 memakai [M11](07-keamanan-api-owasp.md) dan [pemetaan bukti](../OWASP-API-SECURITY.md).
+19. **Base URL API kini `/api/v1`.** Materi lama yang memakai `/api/...` tetap berjalan sampai 14 Mei 2027, tetapi respons membawa `Deprecation`, `Sunset`, dan `Link`. Gunakan `/api/v1` di slide dan contoh baru; spesifikasi lengkap di `/api/v1/openapi.json`.
+20. **Satu pelanggan dibatasi 5 pesanan aktif dan 10 unit per produk.** Demo yang membuat banyak order dengan satu akun akan mendapat `409 HOLD_LIMIT_EXCEEDED`. Pakai beberapa akun, batalkan pesanan lama, atau naikkan `ORDER_MAX_OPEN_ORDERS`/`ORDER_MAX_UNITS_PER_PRODUCT` di `.env` khusus kelas.
+21. **Order dan produk ada di tabel relasional.** Materi yang menyebut "semua order dibaca lalu difilter di memory" sudah tidak berlaku. Untuk memeriksa data gunakan `SELECT ... FROM orders` di file SQLite, bukan namespace `orders` di tabel `records`.
 
 Bila sengaja mempertahankan prototype sebagai tahap pembelajaran, beri label jelas “versi sebelum hardening”, lalu tampilkan perubahan dan alasannya. Hindari dua bab yang sama-sama menyebut perilaku berbeda sebagai kondisi terbaru.
 

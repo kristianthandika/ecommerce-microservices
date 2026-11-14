@@ -4,45 +4,59 @@ Dokumen ini mengikuti route dan schema source saat paket disusun. Contoh UUID, a
 
 ## Konvensi akses
 
-- Base URL melalui nginx: `http://127.0.0.1:3000/api`.
-- Base URL gateway langsung untuk diagnosis lokal: `http://127.0.0.1:8080`.
-- Endpoint di bawah relatif terhadap base URL; jangan menambahkan `/api` dua kali.
-- Body JSON memakai `Content-Type: application/json`. Request DELETE item/keranjang juga memakai body JSON.
+- Base URL melalui nginx: `http://127.0.0.1:3000/api/v1` (versi API saat ini).
+- Base URL gateway langsung untuk diagnosis lokal: `http://127.0.0.1:8080/v1`.
+- Endpoint di bawah relatif terhadap base URL; jangan menambahkan `/api` atau `/v1` dua kali.
+- Spesifikasi mesin (OpenAPI 3.1): `GET /openapi.json` di base URL, sumbernya [`services/gateway/openapi.json`](../../services/gateway/openapi.json). Spesifikasi dibangkitkan dengan `npm run openapi` dan diperiksa CI dengan `npm run openapi:check`; jangan diedit manual. Buka di Swagger Editor, Postman, atau Insomnia untuk mencoba endpoint.
+- Body JSON memakai `Content-Type: application/json`. Request DELETE tidak memakai body.
 - Endpoint privat memakai `Authorization: Bearer <TOKEN>`.
 - Correlation ID opsional pada request harus berupa 1–128 karakter `[A-Za-z0-9_-]`; nilai tidak sesuai diganti gateway.
 - Contoh tidak memuat kredensial nyata. Jangan menaruh token atau password admin pada berkas materi.
 
+### Versi API dan jalur lama
+
+Jalur tanpa versi (`/api/products`, `/api/orders`, ...) masih dilayani dengan perilaku yang sama sampai **14 Mei 2027**, tetapi setiap responsnya membawa:
+
+```http
+Deprecation: @1794614400
+Sunset: Fri, 14 May 2027 00:00:00 GMT
+Link: </api/v1/products>; rel="successor-version"
+```
+
+`Deprecation` memakai format tanggal RFC 9745 (detik sejak epoch), `Sunset` mengikuti RFC 8594. Klien baru wajib memakai `/api/v1`. Versi yang tidak dikenal, misalnya `/api/v2/...`, dijawab 404. Health agregat tersedia di `/api/v1/health` dan, untuk healthcheck container, di `/api/health`.
+
 ## Daftar endpoint
 
-| Metode | Path                            | Akses           |    Sukses | Keterangan                                     |
-| ------ | ------------------------------- | --------------- | --------: | ---------------------------------------------- |
-| GET    | `/health`                       | Publik          | 200 / 503 | Status agregat; 503 berarti degraded           |
-| POST   | `/auth/register`                | Publik          |       201 | Role hasil register selalu user                |
-| POST   | `/auth/login`                   | Publik          |       200 | Access token + cookie refresh HttpOnly         |
-| POST   | `/auth/refresh`                 | Cookie + header |       200 | Rotasi refresh token, access token baru        |
-| POST   | `/auth/logout`                  | Cookie + header |       204 | Mencabut sesi refresh di server                |
-| GET    | `/auth/me`                      | JWT             |       200 | Profil subject token                           |
-| GET    | `/auth/.well-known/jwks.json`   | Publik          |       200 | Public key; prefix `/auth` dihapus gateway     |
-| GET    | `/products`                     | Publik          |       200 | Katalog, pencarian, pagination, atau lookup ID |
-| GET    | `/products/:id`                 | Publik          |       200 | Detail produk                                  |
-| POST   | `/products`                     | Admin           |       201 | Tambah produk                                  |
-| PUT    | `/products/:id`                 | Admin           |       200 | Update parsial, opsional expectedRevision      |
-| DELETE | `/products/:id`                 | Admin           |       204 | Hapus produk                                   |
-| GET    | `/products/admin/summary`       | Admin           |       200 | Ringkasan produk/stok                          |
-| GET    | `/cart`                         | JWT             |       200 | Keranjang dengan quote produk                  |
-| PUT    | `/cart/items/:id`               | JWT + If-Match  |       200 | Set jumlah absolut                             |
-| DELETE | `/cart/items/:id`               | JWT + If-Match  |       200 | Hapus satu produk                              |
-| DELETE | `/cart`                         | JWT + If-Match  |       204 | Kosongkan keranjang                            |
-| POST   | `/cart/checkout`                | JWT + key       |       201 | Checkout snapshot keranjang                    |
-| POST   | `/orders`                       | JWT + key       |       201 | API order lama, tanpa keranjang/alamat         |
-| GET    | `/orders`                       | JWT             |       200 | Daftar order milik pengguna                    |
-| GET    | `/orders/:id`                   | JWT + ownership |       200 | Detail milik pengguna                          |
-| POST   | `/orders/:id/cancel`            | JWT + ownership | 200 / 202 | Batalkan selama fulfillment masih NEW          |
-| GET    | `/orders/admin`                 | Admin           |       200 | Daftar seluruh order                           |
-| GET    | `/orders/admin/summary`         | Admin           |       200 | Ringkasan order                                |
-| GET    | `/orders/admin/:id`             | Admin           |       200 | Detail order lintas pengguna                   |
-| PATCH  | `/orders/admin/:id/fulfillment` | Admin           |       200 | Perubahan proses operasional                   |
-| POST   | `/orders/admin/:id/cancel`      | Admin           | 200 / 202 | Batalkan order yang belum COMPLETED            |
+| Metode | Path                            | Akses           |    Sukses | Keterangan                                      |
+| ------ | ------------------------------- | --------------- | --------: | ----------------------------------------------- |
+| GET    | `/health`                       | Publik          | 200 / 503 | Status agregat; 503 berarti degraded            |
+| GET    | `/openapi.json`                 | Publik          |       200 | Spesifikasi OpenAPI 3.1 API ini                 |
+| POST   | `/auth/register`                | Publik          |       201 | Role hasil register selalu user                 |
+| POST   | `/auth/login`                   | Publik          |       200 | Access token + cookie refresh HttpOnly          |
+| POST   | `/auth/refresh`                 | Cookie + header |       200 | Rotasi refresh token, access token baru         |
+| POST   | `/auth/logout`                  | Cookie + header |       204 | Mencabut sesi refresh di server                 |
+| GET    | `/auth/me`                      | JWT             |       200 | Profil subject token                            |
+| GET    | `/auth/.well-known/jwks.json`   | Publik          |       200 | Public key; prefix `/auth` dihapus gateway      |
+| GET    | `/products`                     | Publik          |       200 | Katalog, pencarian, pagination, atau lookup ID  |
+| GET    | `/products/:id`                 | Publik          |       200 | Detail produk                                   |
+| POST   | `/products`                     | Admin           |       201 | Tambah produk                                   |
+| PUT    | `/products/:id`                 | Admin           |       200 | Update parsial, opsional expectedRevision       |
+| DELETE | `/products/:id`                 | Admin           |       204 | Hapus produk                                    |
+| GET    | `/products/admin/summary`       | Admin           |       200 | Ringkasan produk/stok                           |
+| GET    | `/cart`                         | JWT             |       200 | Keranjang dengan quote produk                   |
+| PUT    | `/cart/items/:id`               | JWT + If-Match  |       200 | Set jumlah absolut                              |
+| DELETE | `/cart/items/:id`               | JWT + If-Match  |       200 | Hapus satu produk                               |
+| DELETE | `/cart`                         | JWT + If-Match  |       204 | Kosongkan keranjang                             |
+| POST   | `/cart/checkout`                | JWT + key       |       201 | Checkout snapshot keranjang                     |
+| POST   | `/orders`                       | JWT + key       |       201 | API order lama, tanpa keranjang/alamat          |
+| GET    | `/orders`                       | JWT             |       200 | Daftar order milik pengguna, offset atau cursor |
+| GET    | `/orders/:id`                   | JWT + ownership |       200 | Detail milik pengguna                           |
+| POST   | `/orders/:id/cancel`            | JWT + ownership | 200 / 202 | Batalkan selama fulfillment masih NEW           |
+| GET    | `/orders/admin`                 | Admin           |       200 | Daftar seluruh order                            |
+| GET    | `/orders/admin/summary`         | Admin           |       200 | Ringkasan order                                 |
+| GET    | `/orders/admin/:id`             | Admin           |       200 | Detail order lintas pengguna                    |
+| PATCH  | `/orders/admin/:id/fulfillment` | Admin           |       200 | Perubahan proses operasional                    |
+| POST   | `/orders/admin/:id/cancel`      | Admin           | 200 / 202 | Batalkan order yang belum COMPLETED             |
 
 Endpoint internal `POST /internal/reservations/:id` berada pada product-service, bukan route publik gateway. Order-service memanggilnya melalui network Docker dengan `x-service-token`. Ia bukan endpoint yang dipanggil langsung dari React. Order-service juga menyertakan token yang sama saat membaca katalog untuk keranjang (`GET /products?ids=`): seluruh pengguna dilayani dari satu alamat IP order-service, sehingga tanpa bukti service-ke-service itu kuota rate-limit per-IP product-service akan dipakai bersama oleh semua keranjang. Gateway membuang header `x-service-token` yang dikirim klien publik, dan route yang tidak dikenal gateway dijawab 404 `NOT_FOUND` dengan bentuk error yang sama.
 
@@ -80,7 +94,7 @@ Respons login juga berisi `expiresIn` (detik) dan header `Set-Cookie` untuk refr
 | Access token  | JWT RS256, dikirim sebagai `Authorization: Bearer` | 15 menit (`JWT_EXPIRES_IN_SECONDS`)         | Memory aplikasi React saja |
 | Refresh token | Opaque acak; server hanya menyimpan hash SHA-256   | 7 hari sejak rotasi terakhir, maks. 30 hari | Cookie `refresh_token`     |
 
-Atribut cookie: `HttpOnly; Secure; SameSite=Strict; Path=/api/auth`. JavaScript tidak dapat membacanya dan browser hanya mengirimnya ke endpoint auth.
+Atribut cookie: `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`. JavaScript tidak dapat membacanya dan browser hanya mengirimnya ke endpoint auth.
 
 `POST /auth/refresh` dan `POST /auth/logout` memakai cookie tersebut, sehingga keduanya wajib membawa header `X-Requested-With` (nilai bebas). Bila browser mengirim `Origin`, nilainya harus termasuk `REFRESH_ALLOWED_ORIGINS`; selain itu dijawab 403 `CSRF_REJECTED`.
 
@@ -174,7 +188,7 @@ Keranjang kosong memiliki `items: []`, total/jumlah 0, dan `canCheckout: false`.
 `GET /cart` dan setiap mutasi keranjang mengirim header `ETag: "<version>"` dan `Cache-Control: no-store`. Setiap perubahan wajib mengirim balik versi itu sebagai `If-Match`:
 
 ```http
-PUT /api/cart/items/11111111-1111-4111-8111-111111111111
+PUT /api/v1/cart/items/11111111-1111-4111-8111-111111111111
 If-Match: "22222222-2222-4222-8222-222222222222"
 Content-Type: application/json
 
@@ -192,7 +206,7 @@ Content-Type: application/json
 
 Jumlah 1–1000 dan ID produk UUID. Maksimal 50 produk berbeda. `PUT quantity=2` berarti jumlah akhir dua, bukan menambah dua.
 
-**Jalur lama (deprecated).** Selama masa transisi, `version` di body masih diterima bila `If-Match` tidak dikirim. Respons jalur ini membawa header `Deprecation: true`, dan konflik tetap dijawab 409 seperti sebelumnya. Jalur ini akan dihapus; klien baru wajib memakai `If-Match`.
+**Jalur lama (deprecated).** Selama masa transisi, `version` di body masih diterima bila `If-Match` tidak dikirim. Respons jalur ini membawa header `Deprecation` (format RFC 9745, mis. `@1794614400`), dan konflik tetap dijawab 409 seperti sebelumnya. Jalur ini akan dihapus; klien baru wajib memakai `If-Match`.
 
 PUT dan DELETE item menghasilkan `{cart:{version,items,updatedAt}}` berisi **record dasar**, bukan quote lengkap. Ambil ETag dari respons mutasi untuk perubahan berikutnya, lalu panggil GET untuk subtotal, stok, dan canCheckout. Setiap mutasi menghasilkan versi baru, bahkan ketika jumlah yang diset sama.
 
@@ -271,18 +285,42 @@ Order PENDING dapat belum memiliki line item final dan totalnya masih 0. Order F
 
 API lama `POST /orders` menerima `{items:[{productId,quantity}]}` dengan 1–50 baris dan quantity 1–1000. Ia tetap memerlukan key, menggabungkan produk duplikat, dan menggunakan reservasi yang sama. Ia tidak memotong/mengosongkan keranjang serta tidak menerima alur alamat checkout.
 
+### Batas tahan stok per pelanggan
+
+Checkout dan `POST /orders` menolak order baru bila pelanggan sudah memegang terlalu banyak stok dalam **pesanan aktif** (PENDING atau CONFIRMED yang fulfillment-nya belum COMPLETED):
+
+| Batas                         | Bawaan | Environment order-service     |
+| ----------------------------- | -----: | ----------------------------- |
+| Pesanan aktif per pelanggan   |      5 | `ORDER_MAX_OPEN_ORDERS`       |
+| Unit satu produk, semua aktif |     10 | `ORDER_MAX_UNITS_PER_PRODUCT` |
+
+Penolakan dijawab `409 HOLD_LIMIT_EXCEEDED` tanpa mengurangi stok:
+
+```json
+{
+  "error": {
+    "message": "Maksimal 10 unit per produk dalam pesanan aktif.",
+    "code": "HOLD_LIMIT_EXCEEDED",
+    "details": { "productId": "…", "limit": 10, "held": 6, "requested": 5 }
+  }
+}
+```
+
+Untuk batas jumlah pesanan, `details` berisi `{ limit, open }`. Retry dengan Idempotency-Key yang sudah menghasilkan order tidak pernah ditolak batas ini. Membatalkan pesanan atau menyelesaikannya (COMPLETED) mengembalikan jatah.
+
 ## Daftar, detail, dan admin
 
 `GET /orders` serta `/orders/admin` mendukung:
 
-| Query  | Aturan                                                                          |
-| ------ | ------------------------------------------------------------------------------- |
-| offset | Default 0, integer nonnegatif                                                   |
-| limit  | Default 20, integer 1–100                                                       |
-| status | Opsional PENDING, CONFIRMED, FAILED, CANCELLATION_REQUESTED, atau CANCELLED     |
-| q      | Maksimal 100 karakter; substring ID atau penerima, tidak peka huruf besar/kecil |
+| Query  | Aturan                                                                              |
+| ------ | ----------------------------------------------------------------------------------- |
+| offset | Default 0, integer 0–10000; untuk halaman bernomor                                  |
+| cursor | Opsional; nilai `nextCursor` dari halaman sebelumnya. Tidak boleh digabung `offset` |
+| limit  | Default 20, integer 1–100                                                           |
+| status | Opsional PENDING, CONFIRMED, FAILED, CANCELLATION_REQUESTED, atau CANCELLED         |
+| q      | Maksimal 100 karakter; substring ID atau penerima, tidak peka huruf besar/kecil     |
 
-Hasil `{orders,total,offset,limit}` diurutkan createdAt terbaru, lalu ID sebagai pembanding berikutnya. Query pelanggan selalu ditambah filter user ID dari token. Detail order bukan milik pengguna menghasilkan 404.
+Hasil `{orders,total,offset,limit,nextCursor}` diurutkan createdAt terbaru, lalu ID sebagai pembanding berikutnya. `nextCursor` bernilai `null` pada halaman terakhir. Cursor (pagination keyset) tetap stabil ketika order baru masuk di antara dua halaman; offset dapat menampilkan order yang sama dua kali dalam kondisi itu. Cursor yang rusak dijawab 400 `INVALID_CURSOR`. Query pelanggan selalu ditambah filter user ID dari token. Detail order bukan milik pengguna menghasilkan 404.
 
 Ringkasan admin order mempunyai `totalOrders`, `confirmedOrders`, `pendingOrders`, `failedOrders`, `cancelledOrders`, `confirmedValue`, dan `processingOrders`. Nilainya agregat seluruh data pada service, termasuk akun/order praktikum yang belum dibersihkan. confirmedValue bukan laporan pembayaran.
 
@@ -324,6 +362,7 @@ Error validasi dapat mempunyai `details` berupa array `{path,message}`. Jangan m
 |  400 | VALIDATION_ERROR, EMPTY_CART                       | Perbaiki body/header/query; key hilang pada route dipetakan sebagai validasi      |
 |  400 | INVALID_JSON / INVALID_REQUEST                     | Benahi JSON; code dapat berbeda sesuai lapisan parser                             |
 |  400 | INVALID_PRECONDITION                               | Kirim `If-Match` berisi satu ETag dari respons keranjang terakhir                 |
+|  400 | INVALID_CURSOR                                     | Pakai `nextCursor` apa adanya; mulai lagi dari halaman pertama bila hilang        |
 |  401 | APP_ERROR, INVALID_CREDENTIALS, INVALID_SESSION    | Login ulang atau perbaiki token; code berbeda menurut asal                        |
 |  401 | INVALID_REFRESH, REFRESH_REUSED                    | Sesi berakhir atau dicabut; arahkan pengguna ke halaman login                     |
 |  403 | FORBIDDEN                                          | Gunakan role yang sesuai; bukan masalah password biasa                            |
@@ -336,6 +375,7 @@ Error validasi dapat mempunyai `details` berupa array `{path,message}`. Jangan m
 |  409 | OUT_OF_STOCK / ORDER_REJECTED                      | Periksa stok dan hasil attempt; percobaan baru memakai versi terbaru              |
 |  409 | APP_ERROR                                          | Contohnya urutan fulfillment tidak valid                                          |
 |  409 | ORDER_NOT_CANCELLABLE                              | Order sudah ditolak, selesai, atau sudah diproses (pelanggan)                     |
+|  409 | HOLD_LIMIT_EXCEEDED                                | Batas tahan per pelanggan; tunggu pesanan selesai, batalkan, atau kurangi jumlah  |
 |  409 | REFRESH_RACE                                       | Tab lain baru saja me-refresh sesi; ulangi refresh sekali                         |
 |  412 | CART_CHANGED                                       | ETag keranjang sudah usang; GET keranjang lagi lalu ulangi dengan ETag baru       |
 |  413 | PAYLOAD_TOO_LARGE                                  | Kurangi payload; JSON service dibatasi sekitar 100 KiB                            |

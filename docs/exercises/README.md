@@ -1,6 +1,6 @@
 # Latihan per Fitur (Starter/Solution)
 
-> **Tambahan setelah prototype:** [paket materi lanjutan](../materi-lanjutan/README.md) menyediakan latihan L0–L9 untuk source terkini, termasuk hardening, cart/checkout, history/admin, dan header/footer. Paket tambahan belum mempunyai branch starter/solution tersendiri. Keterangan pasangan branch pada halaman ini berlaku untuk daftar fitur dasar M0–M4 di bawah.
+> **Tambahan setelah prototype:** [paket materi lanjutan](../materi-lanjutan/README.md) menyediakan latihan L0–L9 untuk source terkini, termasuk hardening, cart/checkout, history/admin, dan header/footer. Fitur lanjutan m12.x di bagian bawah halaman ini memiliki pasangan branch starter/solution sendiri.
 
 Satu file `.md` per fitur (`mX.Y`). Tiap file berisi: tujuan, yang perlu
 dibangun, acceptance, dan **jebakan debugging spesifik** fitur itu.
@@ -42,3 +42,16 @@ bash scripts/dev/worktrees.sh --clean   # bersihkan semua worktree
 | 4     | [m4.3 — Containerization](m4.3-containerization.md)                           |
 | 4     | [m4.4 — Docker Compose](m4.4-docker-compose.md)                               |
 | 4     | [m4.5 — Capstone](m4.5-capstone.md)                                           |
+
+## Fitur lanjutan (m12.x)
+
+Fitur berikut dibangun di atas kode final (`feature/materi-lanjutan`). Berbeda dari rantai M0–M4, **setiap pasangan bercabang dari titik yang sama**: `starter/m12.x` adalah kode final dengan satu fitur dicabut, dan `solution/m12.x` mengembalikannya. Urutan pengerjaan bebas, dan `git diff starter/m12.x solution/m12.x` hanya berisi implementasi fitur itu.
+
+| Modul | Fitur                                                                       |
+| ----- | --------------------------------------------------------------------------- |
+| 12    | [m12.1 — Konkurensi keranjang dengan If-Match/ETag](m12.1-cart-if-match.md) |
+| 12    | [m12.2 — Pembatalan order sebagai saga](m12.2-cancel-saga.md)               |
+| 12    | [m12.3 — Refresh token berotasi](m12.3-refresh-session.md)                  |
+| 12    | [m12.4 — Order ke tabel relasional](m12.4-relational-orders.md)             |
+| 12    | [m12.5 — Batas tahan stok per pelanggan (API6)](m12.5-hold-limit.md)        |
+| 12    | [m12.6 — OpenAPI dan versi API (API9)](m12.6-openapi-versioning.md)         |

@@ -36,21 +36,22 @@ Semua tautan source relatif terhadap repositori `ecommerce-microservices`. Rujuk
 
 ## Model penyimpanan
 
-Tabel fisik yang dipakai wrapper adalah `records(namespace,key,value)` dengan primary key `(namespace,key)`. Berikut namespace bisnis, bukan nama tabel SQL mandiri:
+Setiap service mempunyai satu file SQLite. Data yang hanya dibaca per kunci memakai tabel key/value `records(namespace,key,value,expires_at)`; data yang difilter, diurutkan, atau diagregasi memakai tabel relasional milik service tersebut, dibuat oleh migrasi bernama yang dicatat di `schema_migrations`.
 
-| Database       | Namespace              | Makna                                                             |
-| -------------- | ---------------------- | ----------------------------------------------------------------- |
-| auth.sqlite    | users_email / users_id | Lookup pengguna dengan email unik dan ID                          |
-| product.sqlite | products               | Produk dan stok tersedia; revision dapat belum ada pada data lama |
-| product.sqlite | reservations           | Receipt reservasi serta fingerprint item                          |
-| product.sqlite | metadata               | Penanda seed agar katalog tidak dibuat ulang saat kosong/restart  |
-| order.sqlite   | carts                  | Keranjang milik user dengan version                               |
-| order.sqlite   | checkout_tickets       | Snapshot item/alamat dan key kanonis untuk pasangan user/versi    |
-| order.sqlite   | checkout_keys          | Pengikatan semua key yang diterima ke versi checkout              |
-| order.sqlite   | orders                 | Input internal, fingerprint, status, snapshot final/alamat        |
-| order.sqlite   | idempotency            | Pengikatan key kanonis per pengguna ke ID order                   |
+| Database       | Tabel / namespace         | Makna                                                                             |
+| -------------- | ------------------------- | --------------------------------------------------------------------------------- |
+| auth.sqlite    | `records`: users_email/id | Lookup pengguna dengan email unik dan ID                                          |
+| auth.sqlite    | `records`: refresh_*      | Hash refresh token dan keluarga sesi; penghitung gagal login                      |
+| product.sqlite | tabel `products`          | Produk, stok (`CHECK stock >= 0`), revision; indeks nama dan stok                 |
+| product.sqlite | `records`: reservations   | Receipt reservasi, fingerprint item, status RELEASED/tombstone                    |
+| product.sqlite | `records`: metadata       | Penanda seed agar katalog tidak dibuat ulang saat kosong/restart                  |
+| order.sqlite   | tabel `orders`            | Status, fulfillment, total, penerima, waktu sebagai kolom; sisanya JSON `details` |
+| order.sqlite   | tabel `order_lines`       | Jumlah yang diminta per produk; dasar batas tahan per pelanggan                   |
+| order.sqlite   | `records`: carts          | Keranjang milik user dengan version                                               |
+| order.sqlite   | `records`: checkout_*     | Snapshot checkout dan pengikatan key ke versi keranjang                           |
+| order.sqlite   | `records`: idempotency    | Pengikatan key kanonis per pengguna ke ID order (retensi 24 jam)                  |
 
-User tidak memilih namespace/key database melalui API. Price, total, status, dan userId bukan field bebas yang dipercaya dari browser. Penambahan field JSON opsional menjaga keterbacaan data lama; schema version SQL tetap perlu strategi migration jika struktur tabel berubah.
+User tidak memilih namespace, key, atau SQL melalui API; semua nilai masuk sebagai parameter terikat. Price, total, status, dan userId bukan field bebas yang dipercaya dari browser. Perubahan struktur tabel ditambahkan sebagai migrasi baru di `src/migrations.ts` service terkait, tidak dengan mengubah migrasi yang sudah dirilis.
 
 ## Matriks invariant dan pengujian
 

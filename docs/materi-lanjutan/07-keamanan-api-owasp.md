@@ -21,12 +21,12 @@ OWASP Top 10 untuk aplikasi web berfokus pada halaman yang dirender server. Pada
 | API1   | Apakah objek **ini** milik pemanggil?                         | Order hanya bisa dibaca/dibatalkan pemiliknya    |
 | API2   | Apakah pemanggil benar-benar dia, dan sesinya masih sah?      | JWT RS256, refresh token berotasi, backoff login |
 | API3   | Field mana yang boleh dibaca dan **diubah** pemanggil?        | `role` dan harga tidak bisa dikirim klien        |
-| API4   | Berapa banyak yang boleh diminta, seberapa sering?            | Rate limit, batas halaman, batas body            |
+| API4   | Berapa banyak yang boleh diminta, seberapa sering?            | Rate limit, batas halaman, query SQL berindeks   |
 | API5   | Apakah **fungsi** ini boleh dipanggil role tersebut?          | Endpoint admin dan internal                      |
-| API6   | Apakah alur bisnis bisa disalahgunakan secara otomatis?       | Menahan seluruh stok tanpa membayar              |
+| API6   | Apakah alur bisnis bisa disalahgunakan secara otomatis?       | Batas stok yang ditahan per pelanggan            |
 | API7   | Apakah server mengambil URL atas permintaan klien?            | Tidak ada; ID divalidasi UUID                    |
 | API8   | Apakah konfigurasinya aman secara default?                    | Header, CORS, error generik, container read-only |
-| API9   | Apakah semua endpoint, versi, dan jalur lama diketahui?       | Referensi API, header `Deprecation`              |
+| API9   | Apakah semua endpoint, versi, dan jalur lama diketahui?       | OpenAPI, `/api/v1`, `Deprecation`/`Sunset`       |
 | API10  | Apakah respons service lain diperlakukan sebagai input asing? | Validasi kontrak product-service                 |
 
 ## S1 — API1: objek milik orang lain (20 menit)
@@ -77,7 +77,7 @@ $cheap = @{ items = @(@{ productId = $product.id; quantity = 1 }); total = 1 } |
 
 ## S3 — API2: sesi, refresh token, dan tebakan password (25 menit)
 
-1. Login di browser, buka DevTools → Application → Cookies. Catat atribut cookie `refresh_token`: `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/api/auth`.
+1. Login di browser, buka DevTools → Application → Cookies. Catat atribut cookie `refresh_token`: `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/api/v1/auth`.
 2. Di Console, jalankan `document.cookie`. Cookie refresh **tidak** muncul: skrip yang disisipkan (XSS) tidak bisa mencurinya.
 3. Muat ulang halaman. Anda tetap login, karena sesi dipulihkan lewat cookie. Klik **Keluar**, lalu muat ulang: Anda harus login lagi karena sesi sudah dicabut di server.
 4. Decode payload access token (bagian tengah JWT) dan hitung `exp - iat`. Hasilnya 900 detik.
@@ -136,13 +136,26 @@ docker compose exec -T order-service sh -c 'touch /app/coba 2>/dev/null || echo 
 
 **Hasil:** CSP terpasang; header `Server` hanya `nginx` tanpa versi; route tak dikenal dijawab `404` dengan bentuk error seragam; perintah terakhir mencetak `READ-ONLY` karena container menolak menulis ke root filesystem.
 
-**Tugas inventaris:** buat daftar semua prefix yang diteruskan gateway (lihat [`services/gateway/src/app.ts`](../../services/gateway/src/app.ts)) dan cocokkan dengan [referensi API](03-referensi-api.md). Kirim `PUT /cart/items/:id` dengan `version` di body (cara lama) dan temukan header `Deprecation: true` pada respons. Apa yang dibutuhkan agar jalur lama ini bisa dihapus dengan aman?
+**Tugas inventaris:**
+
+```powershell
+$spec = Invoke-RestMethod "$apiBase/openapi.json"
+$spec.info.version; ($spec.paths.PSObject.Properties.Name).Count
+$legacy = Invoke-WebRequest -Uri 'http://127.0.0.1:3000/api/products?limit=1' -UseBasicParsing
+$legacy.Headers['Deprecation']; $legacy.Headers['Sunset']; $legacy.Headers['Link']
+try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:3000/api/v2/products' -UseBasicParsing }
+catch { "v2 -> $([int]$_.Exception.Response.StatusCode)" }
+```
+
+**Hasil:** versi `1.0.0` dan 23 path; jalur tanpa versi tetap `200` tetapi membawa `Deprecation: @<epoch>`, `Sunset` 14 Mei 2027, dan `Link` ke `/api/v1/...`; `v2` dijawab `404`.
+
+Lalu buat daftar prefix yang diteruskan gateway (lihat [`services/gateway/src/app.ts`](../../services/gateway/src/app.ts)) dan cocokkan dengan `paths` di spesifikasi. Jalankan `npm test --workspace=services/order-service -- openapi-coverage`, tambahkan route percobaan di `routes.ts`, dan amati tes cakupan gagal. **Diskusi:** apa yang dibutuhkan agar alias lama bisa dimatikan dengan aman? (Petunjuk: log `jalur API tanpa versi` di gateway.)
 
 ## S6 — API6, API7, API10: diskusi desain (20 menit)
 
 Kerjakan berkelompok, presentasikan 3 menit per kelompok.
 
-1. **API6.** Belum ada pembayaran, jadi order yang terkonfirmasi langsung menahan stok. Rancang batas yang mencegah satu pengguna menahan seluruh stok tanpa mengganggu pembeli wajar. Di service mana batas itu diterapkan, dan apa yang terjadi pada request paralel?
+1. **API6.** Sistem membatasi 5 pesanan aktif dan 10 unit per produk per pelanggan ([`orders.ts` `assertWithinHoldLimit`](../../services/order-service/src/orders.ts)). Buktikan dengan memesan 11 unit satu produk (harus `409 HOLD_LIMIT_EXCEEDED`), lalu jawab: mengapa batas diperiksa di dalam transaksi pembuatan order, bukan sebelum transaksi? Mengapa retry dengan Idempotency-Key lama tidak boleh ditolak? Batas ini berlaku per akun. Rancang pertahanan terhadap 50 akun hasil registrasi otomatis tanpa memblokir 20 peserta pelatihan yang berbagi satu IP.
 2. **API7.** Fitur baru: admin dapat mengisi "URL gambar produk" yang diunduh server untuk dibuat thumbnail. Sebutkan tiga serangan SSRF yang mungkin terjadi dan kontrolnya.
 3. **API10.** Baca validasi di [`product-client.ts`](../../services/order-service/src/product-client.ts). Apa yang terjadi bila product-service yang disusupi mengembalikan `subtotal` lebih kecil dari `unitPrice × quantity`? Tes mana yang membuktikannya?
 

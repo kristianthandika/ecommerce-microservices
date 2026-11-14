@@ -205,6 +205,6 @@ Kasus ini tidak diselesaikan dengan menyembunyikan semua overflow. Menambahkan `
 
 Tes unit memeriksa perilaku domain, tes service memeriksa HTTP dan otorisasi, tes komponen memeriksa interaksi React, dan E2E API melewati nginx/gateway menuju container nyata. Meminta HTML SPA dengan status 200 belum membuktikan bahwa React berhasil merender semua komponen pada browser.
 
-Pada verifikasi 14 November 2026 tercatat 116 tes workspace, 24 skenario E2E audit, dan 11 skenario E2E belanja lulus. Pembaruan header/footer berikutnya juga melewati delapan tes frontend dan build. Angka ini adalah baseline revisi tersebut; jalankan ulang dan catat hasil pada revisi kelas. Batas pemeriksaan browser interaktif dan detail bukti terdapat pada [peta pengujian](05-peta-kode-dan-pengujian.md).
+Pada verifikasi terakhir 14 November 2026 tercatat 145 tes workspace, 26 skenario E2E audit, dan 11 skenario E2E belanja lulus. Pembaruan header/footer berikutnya juga melewati delapan tes frontend dan build. Angka ini adalah baseline revisi tersebut; jalankan ulang dan catat hasil pada revisi kelas. Batas pemeriksaan browser interaktif dan detail bukti terdapat pada [peta pengujian](05-peta-kode-dan-pengujian.md).
 
 Sebagai pengembangan lanjut, peserta boleh merancang pembayaran, pengiriman, refund, message broker, atau migrasi database server. Tempatkan rancangan itu pada bagian “belum diimplementasikan”; jangan mencampurkannya dengan perilaku yang telah tersedia.

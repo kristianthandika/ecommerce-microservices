@@ -72,3 +72,22 @@ Fitur yang diverifikasi: `If-Match`/`ETag` keranjang (412/428), pembatalan order
 Mutation test pada dua penjaga utama: menghapus tombstone membuat tes balapan gagal (tertangkap). Menghapus pemeriksaan status sebelum menulis `CANCELLED` tidak tertangkap tes, karena pelepasan di product-service sudah idempotent; pemeriksaan itu lapisan pertahanan kedua.
 
 Belum dijalankan: pemindaian DAST (HawkScan), karena CLI `hawk` dan kredensial StackHawk belum tersedia di mesin ini. Pemetaan OWASP ada di [OWASP-API-SECURITY.md](OWASP-API-SECURITY.md).
+
+## Storage relasional, batas tahan stok, OpenAPI dan versi API (14 November 2026)
+
+| Pemeriksaan                                             | Hasil                                                                      |
+| ------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Unit, regresi, integrasi service, component frontend    | 145 tes lulus (sebelumnya 116)                                             |
+| TypeScript, ESLint, `npm run openapi:check`             | Lulus                                                                      |
+| E2E audit melalui nginx dan gateway (`--chaos`)         | 26/26, termasuk validasi respons nyata terhadap skema OpenAPI              |
+| E2E fitur belanja (`--chaos`)                           | 11/11 lewat jalur tanpa versi (`/api/...`): uji kompatibilitas mundur      |
+| Migrasi database nyata v2 → v3 + migrasi service        | 203 order dan 6 produk pindah ke tabel; backup `pre-v3` di tiap volume     |
+| Kesetaraan data hasil migrasi                           | Jumlah, total Rp2.589.950, dan ID/status/fulfillment identik dengan backup |
+| Browser Chromium (Playwright)                           | Semua request ke `/api/v1`, cookie `Path=/api/v1/auth`, widget health OK   |
+| Blok PowerShell inventaris M11 (Windows PowerShell 5.1) | Hasil sesuai dokumen                                                       |
+
+Mutation test: tujuh penjaga dirusak satu per satu dan setiap kali tes yang menjaganya gagal (tertangkap): pemeriksaan batas tahan dihapus, cursor memakai `<=`, indeks riwayat dihapus, endpoint pembatalan tidak didokumentasikan, alias lama tanpa header `Deprecation`, constraint stok negatif dihapus, dan migrasi tak dikenal diterima.
+
+Bug yang ditemukan saat verifikasi browser dan diperbaiki: widget health memanggil `/api/v1/health`, yang belum ada. Gateway kini juga melayani health di `/v1`, dan E2E kontrak memeriksanya.
+
+Belum dijalankan: linter OpenAPI eksternal (`npx @redocly/cli lint`), karena mengunduh paket dari luar tidak diizinkan di sesi ini. Pemeriksaan struktural (semua `$ref` ter-resolve, parameter path lengkap, `operationId` unik) ada di `versioning.test.ts`. DAST (HawkScan) juga belum dijalankan.

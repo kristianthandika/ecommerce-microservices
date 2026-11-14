@@ -88,23 +88,24 @@ npm run lint      # eslint (typescript-eslint)
 
 ## Alur Pelatihan (branch starter/solution)
 
-Selain kode lengkap di `main`, repo ini menyediakan **16 fitur** (`mX.Y`)
+Selain kode lengkap, repo ini menyediakan **22 fitur** (`mX.Y`)
 sebagai **pasangan branch** untuk praktikum langsung. Tiap fitur punya:
 
-- **`starter/mX.Y-…`** — kondisi SEBELUM fitur + `EXERCISE.md` (tujuan, yang
-  perlu dibangun, acceptance, dan **jebakan debugging spesifik** fitur itu).
+- **`starter/mX.Y-…`** — kondisi SEBELUM fitur + `docs/exercises/mX.Y-….md` (tujuan,
+  yang perlu dibangun, acceptance, dan **jebakan debugging spesifik** fitur itu).
   Implementasi fitur belum ada — inilah titik mulai peserta.
 - **`solution/mX.Y-…`** — kondisi SESUDAH: implementasi lengkap + test lulus.
 
-Solution satu fitur menjadi starter fitur berikutnya, jadi seluruhnya membentuk
-rantai berurutan. `solution/m4.5` = isi `main`.
+Untuk M0–M4, solution satu fitur menjadi starter fitur berikutnya, jadi seluruhnya
+membentuk rantai berurutan. `solution/m4.5` adalah prototype sebelum hardening;
+kode terkini ada di `feature/materi-lanjutan`.
 
 ### Cara memakai di kelas
 
 ```bash
 # 1. Mulai dari starter fitur yang sedang dipelajari
 git checkout starter/m2.2-resilient-http-client
-cat EXERCISE.md                 # baca tujuan + acceptance + cara debugging
+cat docs/exercises/m2.2-resilient-http-client.md   # tujuan + acceptance + debugging
 
 # 2. Peserta mengimplementasikan fitur...
 npm run build:packages          # bila fitur menyentuh shared package
@@ -140,6 +141,14 @@ Karena service dijalankan sebagai `.ts` dan shared package dikompilasi, jalankan
 | 4     | `m4.3-containerization`         | Dockerfile multi-stage, non-root, nginx            |
 | 4     | `m4.4-docker-compose`           | orkestrasi, healthcheck-gated                      |
 | 4     | `m4.5-capstone`                 | chaos, production checklist, README                |
+| 12    | `m12.1-cart-if-match`           | If-Match/ETag, 412/428                             |
+| 12    | `m12.2-cancel-saga`             | saga, kompensasi idempoten, tombstone              |
+| 12    | `m12.3-refresh-session`         | rotasi refresh token, deteksi pemakaian ulang      |
+| 12    | `m12.4-relational-orders`       | migrasi ke tabel, indeks, cursor keyset            |
+| 12    | `m12.5-hold-limit`              | OWASP API6: batas tahan stok per pelanggan         |
+| 12    | `m12.6-openapi-versioning`      | OWASP API9: OpenAPI dari zod, `/api/v1`, Sunset    |
+
+Fitur m12.x tidak membentuk rantai: tiap pasangan bercabang dari kode final yang sama, sehingga bisa dikerjakan dalam urutan apa pun.
 
 Rincian tiap fitur + jebakan debugging ada sebagai satu file `.md` per fitur di
 [`docs/exercises/`](docs/exercises/) (akumulatif di tiap branch). Untuk membuka
@@ -206,7 +215,7 @@ Kubernetes. Langkah menuju production: [`docs/PRODUCTION-CHECKLIST.md`](docs/PRO
 
 ## Perubahan setelah audit
 
-Order sekarang mewajibkan header `Idempotency-Key` (8-128 karakter alfanumerik, `_`, atau `-`). Harga berupa integer rupiah. ID produk wajib UUID. Stok dikurangi secara atomik melalui endpoint reservasi internal yang diautentikasi. Order terputus disimpan sebagai `PENDING` dan dipulihkan otomatis. Frontend menggunakan API same-origin `/api`.
+Order sekarang mewajibkan header `Idempotency-Key` (8-128 karakter alfanumerik, `_`, atau `-`). Harga berupa integer rupiah. ID produk wajib UUID. Stok dikurangi secara atomik melalui endpoint reservasi internal yang diautentikasi. Order terputus disimpan sebagai `PENDING` dan dipulihkan otomatis. Frontend menggunakan API same-origin `/api/v1`; jalur tanpa versi `/api/...` masih dilayani sebagai alias usang sampai 14 Mei 2027.
 
 ```bash
 npm run build:packages
@@ -234,4 +243,13 @@ node scripts/e2e-shopping.mjs --chaos
 
 ## Keamanan API (OWASP)
 
-Sesi memakai access token 15 menit plus refresh token berotasi di cookie HttpOnly; login diperlambat per akun setelah lima kegagalan. Mutasi keranjang memakai `If-Match`/`ETag`. Pesanan dapat dibatalkan dan stoknya dikembalikan tepat sekali. Pemetaan setiap risiko OWASP API Security Top 10 (2023) ke kode dan tes ada di [`docs/OWASP-API-SECURITY.md`](docs/OWASP-API-SECURITY.md); latihan kelasnya di [M11](docs/materi-lanjutan/07-keamanan-api-owasp.md).
+Sesi memakai access token 15 menit plus refresh token berotasi di cookie HttpOnly; login diperlambat per akun setelah lima kegagalan. Mutasi keranjang memakai `If-Match`/`ETag`. Pesanan dapat dibatalkan dan stoknya dikembalikan tepat sekali. Satu pelanggan paling banyak memegang 5 pesanan aktif dan 10 unit per produk. Order dan katalog disimpan di tabel SQLite relasional berindeks.
+
+Spesifikasi OpenAPI 3.1 tersedia di `http://localhost:3000/api/v1/openapi.json` (file: [`services/gateway/openapi.json`](services/gateway/openapi.json)). Spesifikasi dibangkitkan dari skema zod tiap service:
+
+```bash
+npm run openapi        # bangkitkan ulang setelah mengubah route atau skema
+npm run openapi:check  # dipakai CI: gagal bila spesifikasi tertinggal dari kode
+```
+
+Pemetaan setiap risiko OWASP API Security Top 10 (2023) ke kode dan tes ada di [`docs/OWASP-API-SECURITY.md`](docs/OWASP-API-SECURITY.md); latihan kelasnya di [M11](docs/materi-lanjutan/07-keamanan-api-owasp.md).
