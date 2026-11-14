@@ -1,7 +1,7 @@
 // Base URL API dibaca dari VITE_API_BASE_URL. PENTING: nilai ini di-BAKE ke
 // bundle saat `npm run build`, BUKAN dibaca saat runtime container (lihat m4.1
-// & Dockerfile frontend). Default same-origin /api; Vite proxies this path during development.
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+// & Dockerfile frontend). Default same-origin /api/v1; Vite proxies /api during development.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
 export interface User {
   id: string;
@@ -72,6 +72,8 @@ export interface OrderPage {
   total: number;
   offset: number;
   limit: number;
+  /** Keyset cursor for the next page (`?cursor=`); null on the last page. */
+  nextCursor: string | null;
 }
 export interface OrderSummary {
   totalOrders: number;

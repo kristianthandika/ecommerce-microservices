@@ -10,6 +10,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import httpProxy from '@fastify/http-proxy';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { createLogger, CORRELATION_ID_HEADER } from '@ecommerce/logger';
 import { config } from './config.ts';
@@ -116,14 +117,47 @@ export async function buildApp({
   // Reverse proxy ke tiap service. Target dari env (Konvensi Konfigurasi).
   // Correlation ID & X-Forwarded-For sudah disuntikkan ke request.raw.headers
   // oleh hook attachCorrelation, jadi diteruskan otomatis oleh proxy.
+  // Daftar ini = inventaris API publik (OWASP API9); openapi.json harus mencakup
+  // semuanya, dicek oleh tes tiap service.
   const routes: { prefix: string; upstream: string; rewritePrefix: string }[] = [
     { prefix: '/auth', upstream: config.services.auth, rewritePrefix: '' }, // /auth/login → <auth>/login
     { prefix: '/products', upstream: config.services.product, rewritePrefix: '/products' },
     { prefix: '/orders', upstream: config.services.order, rewritePrefix: '/orders' },
     { prefix: '/cart', upstream: config.services.order, rewritePrefix: '/cart' },
   ];
-  for (const route of routes) {
-    await app.register(httpProxy, { ...route, replyOptions: { onError: upstreamFailure } });
+  const replyOptions = { onError: upstreamFailure };
+  const openapi = readFileSync(new URL('../openapi.json', import.meta.url), 'utf8');
+
+  // Versi saat ini: /v1/... (publik: /api/v1/...).
+  await app.register(
+    async (v1) => {
+      // Same aggregated health as /health, so clients need a single base URL.
+      v1.get('/health', { config: { rateLimit: false } }, aggregatedHealth);
+      v1.get('/openapi.json', async (_request, reply) =>
+        reply.type('application/json').header('cache-control', 'public, max-age=300').send(openapi),
+      );
+      for (const route of routes) await v1.register(httpProxy, { ...route, replyOptions });
+    },
+    { prefix: '/v1' },
+  );
+
+  // Jalur lama tanpa versi: perilaku sama, ditandai usang (RFC 9745 Deprecation,
+  // RFC 8594 Sunset) dan menunjuk penggantinya, supaya klien punya waktu pindah.
+  const { legacy, publicPrefix } = config.api;
+  if (legacy.enabled) {
+    const deprecation = `@${Math.floor(Date.parse(legacy.deprecatedAt) / 1000)}`;
+    const sunset = new Date(legacy.sunset).toUTCString();
+    await app.register(async (unversioned) => {
+      unversioned.addHook('onRequest', async (request, reply) => {
+        reply
+          .header('deprecation', deprecation)
+          .header('sunset', sunset)
+          .header('link', `<${publicPrefix}/v1${request.url}>; rel="successor-version"`);
+        // Siapa yang masih memakai jalur lama menentukan kapan aman dimatikan.
+        request.log.info({ legacyPath: request.routeOptions.url }, 'jalur API tanpa versi');
+      });
+      for (const route of routes) await unversioned.register(httpProxy, { ...route, replyOptions });
+    });
   }
 
   return app;

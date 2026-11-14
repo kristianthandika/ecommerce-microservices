@@ -29,7 +29,7 @@ export const config = {
     reuseGraceMs: 10_000,
     cookieName: 'refresh_token',
     // Path yang DILIHAT BROWSER (nginx/Vite menambahkan prefix /api).
-    cookiePath: process.env.REFRESH_COOKIE_PATH || '/api/auth',
+    cookiePath: process.env.REFRESH_COOKIE_PATH || '/api/v1/auth',
     cookieSecure: process.env.REFRESH_COOKIE_SECURE !== 'false',
     allowedOrigins: (
       process.env.REFRESH_ALLOWED_ORIGINS ||

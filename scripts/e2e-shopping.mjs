@@ -4,6 +4,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 process.loadEnvFile('.env');
+// Deliberately the unversioned (deprecated) paths and the legacy body `version`:
+// this suite doubles as the backward-compatibility test for existing clients.
 const base = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000/api';
 const run = randomUUID();
 const password = `Shop-${randomUUID()}`;

@@ -51,6 +51,9 @@ beforeAll(async () => {
   process.env.PRODUCT_RETRY_BASE_MS = '20';
   process.env.PRODUCT_CB_THRESHOLD = '3';
   process.env.PRODUCT_CB_RESET_MS = '600';
+  // Resilience, not the per-customer hold limit, is under test: outages leave orders PENDING.
+  process.env.ORDER_MAX_OPEN_ORDERS = '100';
+  process.env.ORDER_MAX_UNITS_PER_PRODUCT = '1000';
 
   authServer = createServer((req, res) => {
     if (req.url?.startsWith('/.well-known/jwks.json')) {

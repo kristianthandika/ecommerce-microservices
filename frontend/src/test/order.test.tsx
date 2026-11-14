@@ -83,6 +83,35 @@ describe('order cancellation', () => {
   });
 });
 describe('checkout submission', () => {
+  it('reports a hold-limit refusal as a definite answer, not an uncertain outcome', async () => {
+    vi.spyOn(api, 'checkout').mockRejectedValue(
+      new ApiError('Maksimal 10 unit per produk dalam pesanan aktif.', 409, 'HOLD_LIMIT_EXCEEDED'),
+    );
+    render(
+      <MemoryRouter initialEntries={['/checkout']}>
+        <Routes>
+          <Route path="/checkout" element={<CheckoutPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    for (const [name, value] of Object.entries({
+      recipient: 'Test Buyer',
+      phone: '081234567890',
+      street: 'Jalan Test 123',
+      city: 'Bandung',
+      province: 'Jawa Barat',
+      postalCode: '40123',
+    })) {
+      fireEvent.change(document.querySelector(`[name="${name}"]`)!, { target: { value } });
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Konfirmasi pesanan' }));
+    });
+    const notice = await screen.findByText(/Maksimal 10 unit per produk/);
+    expect(notice).toHaveTextContent('Lihat riwayat pesanan');
+    expect(notice).not.toHaveTextContent('belum pasti');
+  });
+
   it('blocks double submission, reuses an ambiguous attempt key and navigates to order detail', async () => {
     let reject!: (reason: Error) => void;
     const submit = vi

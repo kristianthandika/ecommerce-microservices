@@ -15,6 +15,7 @@ jobs:
       - run: npm run build:packages
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run openapi:check
       - run: npm test
       - run: npm audit --audit-level=moderate
   integration:
@@ -25,6 +26,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+      # The E2E suite validates live responses against the OpenAPI schemas (zod).
+      - run: npm ci
       - run: node scripts/setup.mjs --demo-admin
       - run: docker compose up --build -d --wait --wait-timeout 180
       - run: node scripts/e2e.mjs --chaos

@@ -13,6 +13,12 @@ export const config = {
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   // Berapa lama Idempotency-Key diingat setelah order-nya selesai (jam → ms).
   idempotencyRetentionMs: Number(process.env.IDEMPOTENCY_RETENTION_HOURS || 24) * 3_600_000,
+  // OWASP API6: batas stok yang boleh ditahan satu pelanggan dalam pesanan aktif
+  // (belum COMPLETED). Tanpa pembayaran, pesanan terkonfirmasi menahan stok tanpa batas waktu.
+  holdLimit: {
+    maxOpenOrders: Number(process.env.ORDER_MAX_OPEN_ORDERS || 5),
+    maxUnitsPerProduct: Number(process.env.ORDER_MAX_UNITS_PER_PRODUCT || 10),
+  },
   // Parameter resilience untuk panggilan ke product-service.
   resilience: {
     timeoutMs: Number(process.env.PRODUCT_TIMEOUT_MS || 1500),
@@ -37,6 +43,9 @@ if (
   config.idempotencyRetentionMs > 720 * 3_600_000
 )
   throw new Error('IDEMPOTENCY_RETENTION_HOURS must be an integer between 1 and 720');
+for (const [name, value] of Object.entries(config.holdLimit))
+  if (!Number.isInteger(value) || value < 1 || value > 1000)
+    throw new Error(`Invalid hold limit: ${name} must be an integer between 1 and 1000`);
 if (
   process.env.NODE_ENV === 'production' &&
   (!process.env.DATA_DIR || config.internalServiceToken.length < 32)

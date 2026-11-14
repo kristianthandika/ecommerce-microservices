@@ -5,6 +5,17 @@ import type { ShippingAddress } from './schemas.ts';
 import { reserveProducts, releaseReservation } from './product-client.ts';
 import { AppError } from './middleware/errors.ts';
 import { config } from './config.ts';
+import {
+  getOrderRow,
+  insertOrderRow,
+  updateOrderRow,
+  unfinishedOrders,
+  pageOrders,
+  orderSummary,
+  heldByCustomer,
+  clearOrderRows,
+  type OrderPageQuery,
+} from './order-table.ts';
 
 export interface OrderItemInput {
   productId: string;
@@ -44,12 +55,11 @@ export interface Order {
   cancelReason?: string;
   cancelledAt?: string;
 }
-interface StoredOrder extends Order {
+export interface StoredOrder extends Order {
   input: OrderItemInput[];
   fingerprint: string;
   failureStatus?: number;
 }
-const orders = database.store<StoredOrder>('orders');
 const keys = database.store<string>('idempotency');
 const checkoutKeys = database.store<string>('checkout_keys');
 const inFlight = new Map<string, Promise<Order>>();
@@ -94,11 +104,11 @@ async function single(key: string, task: () => Promise<Order>): Promise<Order> {
  */
 function settle(id: string, outcome: Partial<StoredOrder> & { status: 'CONFIRMED' | 'FAILED' }) {
   return database.transaction(() => {
-    const latest = orders.get(id);
+    const latest = getOrderRow(id);
     if (!latest) throw new AppError(404, 'Order tidak ditemukan', undefined, 'NOT_FOUND');
     if (latest.status !== 'PENDING') return latest;
-    const settled: StoredOrder = { ...latest, ...outcome };
-    orders.set(id, settled);
+    const settled: StoredOrder = { ...latest, ...outcome, updatedAt: new Date().toISOString() };
+    updateOrderRow(settled);
     if (latest.cartVersion) {
       if (outcome.status === 'CONFIRMED') clearCart(latest.userId, latest.cartVersion);
       else renewCartVersion(latest.userId, latest.cartVersion);
@@ -113,7 +123,7 @@ async function complete(
 ): Promise<Order> {
   // Callers such as the recovery loop hold snapshots that may be seconds old; only
   // the stored record says whether the order still needs work.
-  const order = orders.get(snapshot.id) ?? snapshot;
+  const order = getOrderRow(snapshot.id) ?? snapshot;
   if (order.status === 'CONFIRMED' || cancelling(order.status)) return publicOrder(order);
   if (order.status === 'FAILED')
     throw new AppError(
@@ -135,7 +145,7 @@ async function complete(
     } catch (err) {
       // A cancellation that won the race is the real outcome, not this error
       // (product-service rejects reservations that were released meanwhile).
-      const latest = orders.get(order.id);
+      const latest = getOrderRow(order.id);
       if (latest && cancelling(latest.status)) return publicOrder(latest);
       if (err instanceof AppError && [404, 409].includes(err.status))
         settle(order.id, { status: 'FAILED', failureStatus: err.status });
@@ -154,7 +164,7 @@ async function release(
     await releaseReservation(snapshot.id, ctx);
     return publicOrder(
       database.transaction(() => {
-        const latest = orders.get(snapshot.id)!;
+        const latest = getOrderRow(snapshot.id)!;
         if (latest.status !== 'CANCELLATION_REQUESTED') return latest;
         const now = new Date().toISOString();
         const cancelled: StoredOrder = {
@@ -163,7 +173,7 @@ async function release(
           cancelledAt: now,
           updatedAt: now,
         };
-        orders.set(latest.id, cancelled);
+        updateOrderRow(cancelled);
         // A checkout cancelled before confirmation still has its items in the cart:
         // give the cart a new version so the customer can check out again.
         if (latest.cartVersion) renewCartVersion(latest.userId, latest.cartVersion);
@@ -190,7 +200,7 @@ export async function cancelOrder(
   ctx: { correlationId?: string; signal?: AbortSignal } = {},
 ): Promise<{ order: Order; completed: boolean }> {
   const requested = database.transaction(() => {
-    const order = orders.get(id);
+    const order = getOrderRow(id);
     // Same 404 for "missing" and "someone else's" so IDs cannot be probed.
     if (!order || (actor.role === 'customer' && order.userId !== actor.userId))
       throw new AppError(404, 'Order tidak ditemukan', undefined, 'NOT_FOUND');
@@ -220,7 +230,7 @@ export async function cancelOrder(
       cancelReason: reason || undefined,
       updatedAt: now,
     };
-    orders.set(id, updated);
+    updateOrderRow(updated);
     return updated;
   });
   if (requested.status === 'CANCELLED') return { order: publicOrder(requested), completed: true };
@@ -230,8 +240,36 @@ export async function cancelOrder(
   } catch (err) {
     // The intent is durable; recovery completes it once product-service answers.
     if (err instanceof AppError && err.status >= 500)
-      return { order: publicOrder(orders.get(id)!), completed: false };
+      return { order: publicOrder(getOrderRow(id)!), completed: false };
     throw err;
+  }
+}
+
+/**
+ * OWASP API6 (sensitive business flow): without payment, a confirmed order holds
+ * stock indefinitely, so one account could take a whole product off the shelf.
+ * Checked inside the transaction that creates the order; SQLite serializes writers,
+ * so parallel requests from one customer cannot slip past the limit together.
+ */
+function assertWithinHoldLimit(userId: string, input: OrderItemInput[]): void {
+  const { maxOpenOrders, maxUnitsPerProduct } = config.holdLimit;
+  const held = heldByCustomer(userId);
+  if (held.openOrders >= maxOpenOrders)
+    throw new AppError(
+      409,
+      `Maksimal ${maxOpenOrders} pesanan aktif. Tunggu pesanan selesai atau batalkan salah satu.`,
+      { limit: maxOpenOrders, open: held.openOrders },
+      'HOLD_LIMIT_EXCEEDED',
+    );
+  for (const { productId, quantity } of input) {
+    const already = held.units.get(productId) ?? 0;
+    if (already + quantity > maxUnitsPerProduct)
+      throw new AppError(
+        409,
+        `Maksimal ${maxUnitsPerProduct} unit per produk dalam pesanan aktif.`,
+        { productId, limit: maxUnitsPerProduct, held: already, requested: quantity },
+        'HOLD_LIMIT_EXCEEDED',
+      );
   }
 }
 
@@ -276,7 +314,7 @@ export async function createOrder(
       );
     const existingId = keys.get(key);
     if (existingId) {
-      const existing = orders.get(existingId)!;
+      const existing = getOrderRow(existingId)!;
       if (existing.fingerprint !== fingerprint)
         throw new AppError(
           409,
@@ -286,6 +324,9 @@ export async function createOrder(
         );
       return existing;
     }
+    // A retry with a known key is answered above, so it is never refused by the limit.
+    assertWithinHoldLimit(userId, input);
+    const now = new Date().toISOString();
     const pending: StoredOrder = {
       id: randomUUID(),
       userId,
@@ -297,9 +338,10 @@ export async function createOrder(
       shippingAddress,
       cartVersion,
       fulfillmentStatus: 'NEW',
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
-    orders.insert(pending.id, pending);
+    insertOrderRow(pending, input);
     keys.insert(key, pending.id, Date.now() + config.idempotencyRetentionMs);
     return pending;
   });
@@ -321,12 +363,7 @@ export async function recoverPendingOrders(): Promise<void> {
   if (recovering) return;
   recovering = true;
   try {
-    const unfinished = orders
-      .values()
-      .filter((o) => o.status === 'PENDING' || o.status === 'CANCELLATION_REQUESTED')
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-      .slice(0, RECOVERY_BATCH);
-    for (const order of unfinished) {
+    for (const order of unfinishedOrders(RECOVERY_BATCH)) {
       try {
         if (order.status === 'PENDING') await complete(order, {});
         else await release(order, {});
@@ -342,7 +379,7 @@ export async function recoverPendingOrders(): Promise<void> {
 /** True while an idempotency record must survive: its order may still be retried. */
 export function orderSettledForKey(userId: string, key: string): boolean {
   const id = keys.get(JSON.stringify([userId, key]));
-  const order = id ? orders.get(id) : undefined;
+  const order = id ? getOrderRow(id) : undefined;
   return !order || TERMINAL_STATUSES.includes(order.status);
 }
 
@@ -386,77 +423,40 @@ export function scheduleLegacyIdempotency(now = Date.now()): number {
 }
 
 export function getOrder(id: string, userId: string): Order {
-  const order = orders.get(id);
+  const order = getOrderRow(id);
   if (!order || order.userId !== userId)
     throw new AppError(404, 'Order tidak ditemukan', undefined, 'NOT_FOUND');
   return publicOrder(order);
 }
 export function _reset(): void {
-  orders.clear();
+  clearOrderRows();
   keys.clear();
   checkoutKeys.clear();
 }
 
 export function findOrderByKey(userId: string, key: string): StoredOrder | undefined {
   const id = keys.get(JSON.stringify([userId, key]));
-  return id ? orders.get(id) : undefined;
+  return id ? getOrderRow(id) : undefined;
 }
-export function queryOrders({
-  userId,
-  status,
-  q = '',
-  offset = 0,
-  limit = 20,
-}: {
-  userId?: string;
-  status?: string;
-  q?: string;
-  offset?: number;
-  limit?: number;
-}) {
-  const term = q.toLowerCase();
-  const filtered = orders
-    .values()
-    .filter(
-      (order) =>
-        (!userId || order.userId === userId) &&
-        (!status || order.status === status) &&
-        (!term ||
-          `${order.id} ${order.shippingAddress?.recipient ?? ''}`.toLowerCase().includes(term)),
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+export function queryOrders(query: OrderPageQuery) {
+  const page = pageOrders(query);
   return {
-    orders: filtered.slice(offset, offset + limit).map(publicOrder),
-    total: filtered.length,
-    offset,
-    limit,
+    orders: page.orders.map(publicOrder),
+    total: page.total,
+    offset: query.cursor ? 0 : (query.offset ?? 0),
+    limit: query.limit ?? 20,
+    nextCursor: page.nextCursor,
   };
 }
-export function adminSummary() {
-  const all = orders.values();
-  const count = (status: OrderStatus) => all.filter((order) => order.status === status).length;
-  return {
-    totalOrders: all.length,
-    confirmedOrders: count('CONFIRMED'),
-    pendingOrders: count('PENDING'),
-    failedOrders: count('FAILED'),
-    cancelledOrders: count('CANCELLED') + count('CANCELLATION_REQUESTED'),
-    confirmedValue: all
-      .filter((order) => order.status === 'CONFIRMED')
-      .reduce((sum, order) => sum + order.total, 0),
-    processingOrders: all.filter(
-      (order) => order.status === 'CONFIRMED' && order.fulfillmentStatus === 'PROCESSING',
-    ).length,
-  };
-}
+export const adminSummary = orderSummary;
 export function adminGetOrder(id: string): Order {
-  const order = orders.get(id);
+  const order = getOrderRow(id);
   if (!order) throw new AppError(404, 'Order tidak ditemukan', undefined, 'NOT_FOUND');
   return publicOrder(order);
 }
 export function updateFulfillment(id: string, status: 'PROCESSING' | 'COMPLETED'): Order {
   return database.transaction(() => {
-    const order = orders.get(id);
+    const order = getOrderRow(id);
     if (!order) throw new AppError(404, 'Order tidak ditemukan', undefined, 'NOT_FOUND');
     if (order.status !== 'CONFIRMED')
       throw new AppError(409, 'Hanya order terkonfirmasi yang bisa diproses');
@@ -470,7 +470,7 @@ export function updateFulfillment(id: string, status: 'PROCESSING' | 'COMPLETED'
     )
       throw new AppError(409, 'Urutan status tidak valid');
     const updated = { ...order, fulfillmentStatus: status, updatedAt: new Date().toISOString() };
-    orders.set(id, updated);
+    updateOrderRow(updated);
     return publicOrder(updated);
   });
 }

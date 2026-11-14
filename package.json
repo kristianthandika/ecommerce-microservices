@@ -21,7 +21,9 @@
     "format": "prettier --write .",
     "loadtest": "npm run loadtest --workspace=services/gateway",
     "test:e2e": "node scripts/e2e.mjs",
-    "test:shopping": "node scripts/e2e-shopping.mjs"
+    "test:shopping": "node scripts/e2e-shopping.mjs",
+    "openapi": "node scripts/openapi.mjs",
+    "openapi:check": "node scripts/openapi.mjs --check"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

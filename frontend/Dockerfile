@@ -24,7 +24,7 @@ RUN npm ci --no-audit --no-fund --workspace=frontend --include-workspace-root
 # VITE_API_BASE_URL di-BAKE SAAT BUILD (bukan runtime nginx). Ini URL yang
 # diakses BROWSER user (jalan di host, di luar Docker network) → default
 # localhost:8080, bukan http://gateway:8080. Lihat m4.1/m4.4.
-ARG VITE_API_BASE_URL=/api
+ARG VITE_API_BASE_URL=/api/v1
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 COPY frontend ./frontend

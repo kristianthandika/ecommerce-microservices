@@ -46,7 +46,7 @@ describe('access and refresh tokens', () => {
     expect(cookie.header).toMatch(/HttpOnly/);
     expect(cookie.header).toMatch(/Secure/);
     expect(cookie.header).toMatch(/SameSite=Strict/);
-    expect(cookie.header).toMatch(/Path=\/api\/auth/);
+    expect(cookie.header).toMatch(/Path=\/api\/v1\/auth;/);
     // The refresh token itself never appears in the JSON body.
     expect(JSON.stringify(res.body)).not.toContain(cookie.value);
   });

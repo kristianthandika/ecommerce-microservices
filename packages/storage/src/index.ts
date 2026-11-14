@@ -1,4 +1,5 @@
 import { DatabaseSync, backup, type StatementSync } from 'node:sqlite';
+export type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -24,39 +25,85 @@ const MIGRATIONS: readonly ((db: DatabaseSync) => void)[] = [
     db.exec(
       'ALTER TABLE records ADD COLUMN expires_at INTEGER; CREATE INDEX records_expiry ON records(expires_at) WHERE expires_at IS NOT NULL;',
     ),
+  // v3: ledger of service-owned migrations (relational tables live next to `records`).
+  (db) =>
+    db.exec(
+      'CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL) STRICT',
+    ),
 ];
 export const SCHEMA_VERSION = MIGRATIONS.length;
+
+/**
+ * A schema change owned by one service, for example a relational table that replaces
+ * a key/value namespace. Applied once, in list order, each in its own transaction
+ * together with its ledger row. Never edit or rename a released migration: append one.
+ */
+export interface ServiceMigration {
+  readonly name: string;
+  up(db: DatabaseSync): void;
+}
+export interface DatabaseOptions {
+  directory?: string;
+  migrations?: readonly ServiceMigration[];
+}
 
 /** One SQLite database per service; tests use an isolated in-memory database. */
 export class ServiceDatabase {
   private readonly db: DatabaseSync;
-  constructor(
-    service: string,
-    directory = process.env.DATA_DIR ?? (process.env.NODE_ENV === 'test' ? undefined : './data'),
-  ) {
+  private readonly statements = new Map<string, StatementSync>();
+  /** `directoryOrOptions` as a string is the data directory (kept for existing callers). */
+  constructor(service: string, directoryOrOptions?: string | DatabaseOptions) {
+    const options =
+      typeof directoryOrOptions === 'object'
+        ? directoryOrOptions
+        : { directory: directoryOrOptions };
+    const directory =
+      options.directory ??
+      process.env.DATA_DIR ??
+      (process.env.NODE_ENV === 'test' ? undefined : './data');
     if (directory) mkdirSync(directory, { recursive: true });
     const file = directory ? join(directory, `${service}.sqlite`) : ':memory:';
     this.db = new DatabaseSync(file);
     try {
-      this.migrate(file);
+      this.migrate(file, options.migrations ?? []);
     } catch (err) {
       this.db.close();
       throw err;
     }
   }
 
-  private migrate(file: string): void {
+  private migrate(file: string, serviceMigrations: readonly ServiceMigration[]): void {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
     if (version > SCHEMA_VERSION)
       throw new Error(
         `Unsupported database schema version: ${version} (this build supports ${SCHEMA_VERSION})`,
       );
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;');
-    if (version === SCHEMA_VERSION) return;
+    // Foreign keys are off by default in SQLite and the setting is per connection.
+    this.db.exec(
+      'PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;',
+    );
+    const names = serviceMigrations.map((migration) => migration.name);
+    if (new Set(names).size !== names.length) throw new Error('Duplicate service migration name');
+    const applied = new Set(
+      version >= 3
+        ? this.db
+            .prepare('SELECT name FROM schema_migrations')
+            .all()
+            .map((row) => String(row.name))
+        : [],
+    );
+    // A migration this build does not know means a newer release wrote the file;
+    // running older code against it could silently corrupt data.
+    const unknown = [...applied].filter((name) => !names.includes(name));
+    if (unknown.length)
+      throw new Error(`Unsupported database schema: unknown migration ${unknown.join(', ')}`);
+    const pending = serviceMigrations.filter((migration) => !applied.has(migration.name));
+    if (version === SCHEMA_VERSION && !pending.length) return;
     // Existing data gets a consistent copy before it is touched. VACUUM INTO is
     // synchronous and works on a live WAL database.
     if (version > 0 && file !== ':memory:') {
-      const target = `${file}.pre-v${version + 1}-${Date.now()}.bak`;
+      const label = version < SCHEMA_VERSION ? `v${version + 1}` : pending[0].name;
+      const target = `${file}.pre-${label}-${Date.now()}.bak`;
       this.db.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`);
     }
     for (let step = version; step < SCHEMA_VERSION; step++) {
@@ -65,6 +112,33 @@ export class ServiceDatabase {
         this.db.exec(`PRAGMA user_version=${step + 1}`);
       });
     }
+    const record = this.db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?,?)');
+    for (const migration of pending) {
+      this.transaction(() => {
+        migration.up(this.db);
+        record.run(migration.name, new Date().toISOString());
+      });
+    }
+  }
+
+  /** Names of the service migrations applied to this database, in application order. */
+  get appliedMigrations(): string[] {
+    return this.db
+      .prepare('SELECT name FROM schema_migrations ORDER BY applied_at, rowid')
+      .all()
+      .map((row) => String(row.name));
+  }
+  /**
+   * Prepared statement for a service-owned table, compiled once per database.
+   * Always bind values as parameters; never interpolate them into `sql`.
+   */
+  statement(sql: string): StatementSync {
+    let statement = this.statements.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.statements.set(sql, statement);
+    }
+    return statement;
   }
 
   get schemaVersion(): number {

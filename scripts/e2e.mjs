@@ -2,14 +2,17 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { responses } from './openapi.mjs';
 
 try {
   process.loadEnvFile('.env');
 } catch {
   /* CI may provide environment directly. */
 }
-const base = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000/api';
-const frontend = base.replace(/\/api$/, '');
+// E2E_BASE_URL is the public API root; business calls use the current version under it.
+const apiRoot = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000/api';
+const base = `${apiRoot}/v1`;
+const frontend = apiRoot.replace(/\/api$/, '');
 const checks = [];
 const startedAt = new Date().toISOString();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,7 +36,8 @@ async function api(
   if (body !== undefined || raw !== undefined) headers['content-type'] = 'application/json';
   if (token) headers.authorization = `Bearer ${token}`;
   if (key) headers['idempotency-key'] = key;
-  const response = await fetch(`${base}${path}`, {
+  // Aggregated health is operational and unversioned.
+  const response = await fetch(`${path === '/health' ? apiRoot : base}${path}`, {
     method,
     headers,
     body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
@@ -85,6 +89,7 @@ async function healthy() {
   throw new Error('Stack did not become healthy');
 }
 let adminToken, userToken, otherToken, product, durableOrder;
+const racerTokens = [];
 const prefix = randomUUID();
 const password = `Test-${randomUUID()}`;
 const email = `e2e-${prefix}@test.local`;
@@ -128,6 +133,12 @@ try {
     otherToken = (
       await api('/auth/login', { method: 'POST', body: { email: secondEmail, password } })
     ).data.token;
+    // Separate customers for the stock race: one account may hold only a few open orders.
+    for (let i = 0; i < 3; i++) {
+      const racer = { email: `racer${i}-${prefix}@test.local`, password };
+      assert.equal((await api('/auth/register', { method: 'POST', body: racer })).status, 201);
+      racerTokens.push((await api('/auth/login', { method: 'POST', body: racer })).data.token);
+    }
   });
   await check('concurrent duplicate registrations return one 201 and one 409', async () => {
     const body = { email: `race-${prefix}@test.local`, password };
@@ -211,7 +222,7 @@ try {
     assert.equal(updated.data.product.stock, 10);
     assert.equal((await api('/products?limit=1000')).status, 400);
   });
-  await check('UUID validation, required key and duplicate-line stock checks', async () => {
+  await check('UUID validation, required key and per-customer hold limit', async () => {
     assert.equal(
       (
         await api('/orders', {
@@ -233,22 +244,21 @@ try {
       ).status,
       400,
     );
-    assert.equal(
-      (
-        await api('/orders', {
-          method: 'POST',
-          token: userToken,
-          key: randomUUID(),
-          body: {
-            items: [
-              { productId: product.id, quantity: 6 },
-              { productId: product.id, quantity: 6 },
-            ],
-          },
-        })
-      ).status,
-      409,
-    );
+    // Duplicate lines are summed before any check: 6 + 6 exceeds what one customer may hold.
+    const greedy = await api('/orders', {
+      method: 'POST',
+      token: userToken,
+      key: randomUUID(),
+      body: {
+        items: [
+          { productId: product.id, quantity: 6 },
+          { productId: product.id, quantity: 6 },
+        ],
+      },
+    });
+    assert.equal(greedy.status, 409);
+    assert.equal(greedy.data.error.code, 'HOLD_LIMIT_EXCEEDED');
+    assert.equal(greedy.data.error.details.requested, 12);
     assert.equal((await api(`/products/${product.id}`)).data.product.stock, 10);
   });
   await check(
@@ -283,10 +293,10 @@ try {
   );
   await check('concurrent distinct orders never oversell remaining stock', async () => {
     const results = await Promise.all(
-      Array.from({ length: 12 }, () =>
+      Array.from({ length: 12 }, (_, i) =>
         api('/orders', {
           method: 'POST',
-          token: userToken,
+          token: racerTokens[i % racerTokens.length],
           key: randomUUID(),
           body: { items: [{ productId: product.id, quantity: 1 }] },
         }),
@@ -410,7 +420,7 @@ try {
     const claims = JSON.parse(Buffer.from(login.data.token.split('.')[1], 'base64url'));
     assert.equal(claims.exp - claims.iat, 900);
     const first = refreshCookie(login);
-    for (const attribute of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/api/auth'])
+    for (const attribute of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/api/v1/auth'])
       assert.ok(first.header.includes(attribute), attribute);
     const foreign = await api('/auth/refresh', {
       method: 'POST',
@@ -469,6 +479,65 @@ try {
     assert.ok(Number(locked.headers.get('retry-after')) > 0);
     const unaffected = await api('/auth/login', { method: 'POST', body: { email, password } });
     assert.equal(unaffected.status, 200);
+  });
+  await check('responses match the published OpenAPI contract', async () => {
+    const document = await fetch(`${base}/openapi.json`);
+    assert.equal(document.status, 200);
+    const spec = await document.json();
+    assert.equal(spec.openapi, '3.1.0');
+    assert.ok(spec.paths['/orders'].post.parameters.length > 0);
+    const created = await api('/products', {
+      method: 'POST',
+      token: adminToken,
+      body: { name: `Contract ${prefix}`, price: 700, stock: 5 },
+    });
+    responses.ProductEnvelope.parse(created.data);
+    const id = created.data.product.id;
+    responses.ProductPage.parse((await api(`/products?q=Contract&limit=5`)).data);
+    responses.ProductPage.parse((await api(`/products?ids=${id}`)).data);
+    responses.UserEnvelope.parse((await api('/auth/me', { token: userToken })).data);
+    responses.Session.parse(
+      (await api('/auth/login', { method: 'POST', body: { email, password } })).data,
+    );
+    responses.CartEnvelope.parse((await api('/cart', { token: userToken })).data);
+    const placed = await api('/orders', {
+      method: 'POST',
+      token: userToken,
+      key: randomUUID(),
+      body: { items: [{ productId: id, quantity: 1 }] },
+    });
+    responses.OrderEnvelope.parse(placed.data);
+    const page = responses.OrderPage.parse(
+      (await api('/orders?limit=1', { token: userToken })).data,
+    );
+    assert.ok(page.nextCursor, 'more than one order, so a next cursor');
+    responses.OrderPage.parse(
+      (await api(`/orders?limit=1&cursor=${page.nextCursor}`, { token: userToken })).data,
+    );
+    responses.OrderPage.parse((await api('/orders/admin?limit=2', { token: adminToken })).data);
+    responses.OrderSummary.parse((await api('/orders/admin/summary', { token: adminToken })).data);
+    responses.StockSummary.parse(
+      (await api('/products/admin/summary', { token: adminToken })).data,
+    );
+    responses.Health.parse((await api('/health')).data);
+    // The UI's health widget uses the same base URL as every other call.
+    responses.Health.parse(await (await fetch(`${base}/health`)).json());
+    responses.Error.parse((await api(`/orders/${randomUUID()}`, { token: userToken })).data);
+    responses.OrderEnvelope.parse(
+      (await api(`/orders/${placed.data.order.id}/cancel`, { method: 'POST', token: userToken }))
+        .data,
+    );
+    await api(`/products/${id}`, { method: 'DELETE', token: adminToken });
+  });
+  await check('unversioned paths still work but announce their successor and sunset', async () => {
+    const legacy = await fetch(`${apiRoot}/products?limit=1`);
+    assert.equal(legacy.status, 200);
+    assert.match(legacy.headers.get('deprecation') ?? '', /^@\d+$/);
+    assert.ok(Date.parse(legacy.headers.get('sunset') ?? '') > Date.now());
+    assert.equal(legacy.headers.get('link'), '</api/v1/products?limit=1>; rel="successor-version"');
+    const current = await fetch(`${base}/products?limit=1`);
+    assert.equal(current.headers.get('deprecation'), null);
+    assert.equal((await fetch(`${apiRoot}/v2/products`)).status, 404);
   });
   if (process.argv.includes('--chaos')) {
     await check('cart catalog reads for all users are not throttled as one client', async () => {

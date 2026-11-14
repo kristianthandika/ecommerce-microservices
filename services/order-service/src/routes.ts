@@ -17,18 +17,16 @@ import {
 import { getCart, changeItem, clearCart, describeCart } from './cart.ts';
 import { checkoutCart } from './checkout.ts';
 import {
-  itemsSchema,
-  addressSchema,
+  orderSchema,
+  checkoutSchema,
+  quantitySchema,
+  fulfillmentSchema,
   keySchema,
   paginationSchema,
   cancelSchema,
 } from './schemas.ts';
 import { cartPrecondition, sendCartVersion } from './middleware/precondition.ts';
 
-const orderSchema = z.object({ items: itemsSchema });
-const checkoutSchema = z.object({ version: z.uuid(), shippingAddress: addressSchema });
-// `version` di body tetap diterima selama masa transisi; If-Match yang diutamakan.
-const quantitySchema = z.object({ quantity: z.number().int().min(1).max(1000) });
 async function respondOrder(
   req: Request,
   res: Response,
@@ -127,7 +125,7 @@ export function buildRouter(): Router {
     res.json({ order: adminGetOrder(z.uuid().parse(req.params.id)) }),
   );
   router.patch('/orders/admin/:id/fulfillment', requireAuth, requireAdmin, (req, res) => {
-    const { status } = z.object({ status: z.enum(['PROCESSING', 'COMPLETED']) }).parse(req.body);
+    const { status } = fulfillmentSchema.parse(req.body);
     res.json({ order: updateFulfillment(z.uuid().parse(req.params.id), status) });
   });
   router.post('/orders/admin/:id/cancel', requireAuth, requireAdmin, async (req, res) => {

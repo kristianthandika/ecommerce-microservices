@@ -10,7 +10,7 @@ import { AppError } from './errors.ts';
  * yields 428 Precondition Required (RFC 6585), so lost updates cannot happen silently.
  *
  * The `version` body field is still accepted for one release so existing clients
- * keep working; such responses carry `Deprecation: true`. A DELETE body has no
+ * keep working; such responses carry `Deprecation` (RFC 9745). A DELETE body has no
  * defined semantics in HTTP and some proxies drop it, which is why the header wins.
  */
 export interface Precondition {
@@ -19,6 +19,8 @@ export interface Precondition {
 }
 
 const versionSchema = z.uuid();
+/** RFC 9745 structured date: when the body `version` field became deprecated. */
+export const BODY_VERSION_DEPRECATED = `@${Date.UTC(2026, 10, 14) / 1000}`;
 
 export function cartPrecondition(req: Request, res: Response): Precondition {
   const header = req.get('if-match');
@@ -36,7 +38,7 @@ export function cartPrecondition(req: Request, res: Response): Precondition {
   }
   const legacy = versionSchema.safeParse((req.body as { version?: unknown } | undefined)?.version);
   if (legacy.success) {
-    res.set('Deprecation', 'true');
+    res.set('Deprecation', BODY_VERSION_DEPRECATED);
     return { version: legacy.data, conflictStatus: 409 };
   }
   throw new AppError(

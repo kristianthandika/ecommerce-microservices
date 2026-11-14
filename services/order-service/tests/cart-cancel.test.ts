@@ -190,7 +190,7 @@ describe('cart concurrency with If-Match / ETag', () => {
       json: { quantity: 1, version },
     });
     expect(legacy.status).toBe(200);
-    expect(legacy.headers.get('deprecation')).toBe('true');
+    expect(legacy.headers.get('deprecation')).toMatch(/^@\d+$/); // RFC 9745
     const stale = await call(`/cart/items/${id}`, { method: 'DELETE', json: { version } });
     expect(stale.status).toBe(409); // unchanged behavior for old clients
   });
@@ -262,8 +262,10 @@ describe('order cancellation releases stock exactly once', () => {
       (await call(`/orders/admin/${done}/cancel`, { token: admin, method: 'POST' })).status,
     ).toBe(409);
 
-    const failed = await order(p.id, 99);
+    // 6 > 4 units left, but within the per-customer hold limit: rejected for stock.
+    const failed = await order(p.id, 6);
     expect(failed.status).toBe(409);
+    expect(failed.data.error.code).toBe('OUT_OF_STOCK');
     const rejected = orders.queryOrders({ userId: 'buyer', status: 'FAILED' }).orders[0];
     expect((await call(`/orders/${rejected.id}/cancel`, { method: 'POST' })).status).toBe(409);
   });

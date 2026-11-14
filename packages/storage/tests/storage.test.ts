@@ -107,6 +107,70 @@ describe('schema migrations and retention', () => {
     }
   });
 
+  it('applies service migrations once, in order, with a backup of existing data', async () => {
+    const { readdirSync } = await import('node:fs');
+    const directory = mkdtempSync(join(tmpdir(), 'service-db-service-migration-'));
+    const createTable = {
+      name: 'test-001-items',
+      up: (raw: import('node:sqlite').DatabaseSync) =>
+        raw.exec('CREATE TABLE items (id TEXT PRIMARY KEY, qty INTEGER NOT NULL) STRICT'),
+    };
+    const moveData = {
+      name: 'test-002-move',
+      up: (raw: import('node:sqlite').DatabaseSync) =>
+        raw.exec(
+          "INSERT INTO items SELECT key, json_extract(value,'$.qty') FROM records WHERE namespace='items'; DELETE FROM records WHERE namespace='items';",
+        ),
+    };
+    try {
+      let db = new ServiceDatabase('svc', { directory, migrations: [createTable] });
+      db.store<{ qty: number }>('items').set('a', { qty: 3 });
+      db.close();
+      db = new ServiceDatabase('svc', { directory, migrations: [createTable, moveData] });
+      try {
+        expect(db.appliedMigrations).toEqual(['test-001-items', 'test-002-move']);
+        expect(db.statement('SELECT qty FROM items WHERE id=?').get('a')?.qty).toBe(3);
+        expect(db.store('items').size).toBe(0);
+      } finally {
+        db.close();
+      }
+      expect(readdirSync(directory).some((name) => name.includes('.pre-test-002-move-'))).toBe(
+        true,
+      );
+      // An older build that does not know test-002 must refuse the newer file.
+      expect(() => new ServiceDatabase('svc', { directory, migrations: [createTable] })).toThrow(
+        'unknown migration test-002-move',
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls a failed service migration back without recording it', () => {
+    const broken = {
+      name: 'test-broken',
+      up: (raw: import('node:sqlite').DatabaseSync) =>
+        raw.exec('CREATE TABLE half (id TEXT); INSERT INTO missing VALUES (1);'),
+    };
+    expect(() => new ServiceDatabase('broken', { migrations: [broken] })).toThrow();
+    expect(() => new ServiceDatabase('dupe', { migrations: [broken, broken] })).toThrow(
+      'Duplicate service migration',
+    );
+    const directory = mkdtempSync(join(tmpdir(), 'service-db-broken-'));
+    try {
+      expect(() => new ServiceDatabase('broken', { directory, migrations: [broken] })).toThrow();
+      const db = new ServiceDatabase('broken', { directory });
+      try {
+        expect(db.appliedMigrations).toEqual([]);
+        expect(() => db.statement('SELECT * FROM half')).toThrow('no such table');
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a database written by a newer release', async () => {
     const { DatabaseSync } = await import('node:sqlite');
     const directory = mkdtempSync(join(tmpdir(), 'service-db-future-'));

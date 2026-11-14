@@ -17,6 +17,17 @@ export const config = {
     timeWindow: process.env.GATEWAY_RATE_LIMIT_WINDOW || '1 minute',
   },
   healthTimeoutMs: Number(process.env.HEALTH_TIMEOUT_MS || 1000),
+  api: {
+    // Prefix publik di depan gateway (nginx/Vite memotongnya sebelum meneruskan).
+    // Dipakai untuk header Link yang menunjuk ke versi pengganti.
+    publicPrefix: process.env.PUBLIC_API_PREFIX ?? '/api',
+    legacy: {
+      // Jalur tanpa versi (/api/products, ...) tetap dilayani sampai tanggal sunset.
+      enabled: process.env.LEGACY_API_ENABLED !== 'false',
+      deprecatedAt: '2026-11-14T00:00:00Z',
+      sunset: process.env.LEGACY_API_SUNSET || '2027-05-14T00:00:00Z',
+    },
+  },
 } as const;
 
 // Gagal cepat saat start: nilai env yang salah ketik (mis. "10O") menjadi NaN dan
@@ -29,3 +40,7 @@ for (const [name, value, max] of [
   if (!Number.isInteger(value) || value < 1 || value > max)
     throw new Error(`Invalid gateway setting: ${name}`);
 }
+if (Number.isNaN(Date.parse(config.api.legacy.sunset)))
+  throw new Error('Invalid gateway setting: LEGACY_API_SUNSET must be an ISO date');
+if (config.api.publicPrefix && !/^\/[A-Za-z0-9/_-]*[^/]$/.test(config.api.publicPrefix))
+  throw new Error('Invalid gateway setting: PUBLIC_API_PREFIX must look like /api');

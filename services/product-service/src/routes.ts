@@ -4,9 +4,12 @@ import { validate } from './middleware/validate.ts';
 import { requireAuth } from './middleware/require-auth.ts';
 import { requireRole } from './middleware/require-role.ts';
 import { requireServiceToken } from './middleware/service-token.ts';
+import { productSchema, productUpdateSchema, reservationSchema } from './schemas.ts';
 import {
-  listProducts,
   getProduct,
+  getProducts,
+  searchProducts,
+  stockSummary,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -15,45 +18,8 @@ import {
   releaseReservation,
 } from './products.ts';
 
-const productSchema = z.object({
-  // trim() dulu: nama berisi spasi saja bukan nama yang valid.
-  name: z.string().trim().min(1, 'Nama produk wajib diisi').max(200, 'Nama terlalu panjang'),
-  price: z
-    .number()
-    .int('Harga harus berupa integer rupiah')
-    .positive('Harga harus lebih dari 0')
-    .max(1_000_000_000, 'Harga tidak wajar'),
-  stock: z
-    .number()
-    .int()
-    .nonnegative('Stok tidak boleh negatif')
-    .max(1_000_000, 'Stok tidak wajar')
-    .default(0),
-});
-const productUpdateSchema = productSchema
-  .partial()
-  .extend({
-    stock: productSchema.shape.stock.unwrap().optional(),
-    expectedRevision: z.number().int().nonnegative().optional(),
-  })
-  .refine(
-    (value) => Object.keys(value).some((key) => key !== 'expectedRevision'),
-    'Minimal satu field wajib diisi',
-  );
-
 export function buildRouter(): Router {
   const router = Router();
-  const reservationSchema = z.object({
-    items: z
-      .array(
-        z.object({
-          productId: z.uuid(),
-          quantity: z.number().int().positive().max(50_000),
-        }),
-      )
-      .min(1)
-      .max(50),
-  });
   // Internal (service-ke-service): TIDAK dirutekan gateway, wajib service token.
   router.post(
     '/internal/reservations/:id',
@@ -77,12 +43,7 @@ export function buildRouter(): Router {
   // Admin-only: ringkasan stok. Didaftarkan SEBELUM '/products/:id' supaya
   // 'admin' tidak tertangkap sebagai :id.
   router.get('/products/admin/summary', requireAuth, requireRole('admin'), (_req, res) => {
-    const products = listProducts();
-    res.json({
-      totalProducts: products.length,
-      lowStock: products.filter((product) => product.stock > 0 && product.stock <= 5).length,
-      outOfStock: products.filter((product) => product.stock === 0).length,
-    });
+    res.json(stockSummary());
   });
 
   // Publik: baca katalog.
@@ -94,27 +55,13 @@ export function buildRouter(): Router {
         .transform((value) => value.split(','))
         .pipe(z.array(z.uuid()).min(1).max(50))
         .parse(req.query.ids);
-      res.json({
-        products: ids.flatMap((id) => {
-          try {
-            return [getProduct(id)];
-          } catch {
-            return [];
-          }
-        }),
-      });
+      res.json({ products: getProducts(ids) });
       return;
     }
     const q = z.string().trim().max(100).default('').parse(req.query.q).toLowerCase();
     const limit = z.coerce.number().int().min(1).max(100).default(100).parse(req.query.limit);
-    const offset = z.coerce.number().int().min(0).default(0).parse(req.query.offset);
-    const products = listProducts().filter((product) => product.name.toLowerCase().includes(q));
-    res.json({
-      products: products.slice(offset, offset + limit),
-      total: products.length,
-      offset,
-      limit,
-    });
+    const offset = z.coerce.number().int().min(0).max(10_000).default(0).parse(req.query.offset);
+    res.json({ ...searchProducts({ q, offset, limit }), offset, limit });
   });
   router.get('/products/:id', (req: Request, res: Response) =>
     res.json({ product: getProduct(String(req.params.id)) }),

@@ -24,6 +24,8 @@ export function CheckoutPage() {
   const [address, setAddress] = useState(emptyAddress);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Network failures and 5xx leave the outcome unknown; a 4xx is a definite answer.
+  const [ambiguous, setAmbiguous] = useState(false);
   const lock = useRef(false);
   const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
   async function submit(event: FormEvent) {
@@ -41,6 +43,7 @@ export function CheckoutPage() {
       navigate(`/orders/${order.id}`, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Checkout gagal');
+      setAmbiguous(!(err instanceof ApiError) || err.status === 0 || err.status >= 500);
       if (err instanceof ApiError && [400, 409].includes(err.status))
         await reload().catch(() => {});
     } finally {
@@ -90,7 +93,8 @@ export function CheckoutPage() {
       </div>
       {error && (
         <Notice error>
-          {error} Jika hasil belum pasti, gunakan tombol yang sama atau periksa{' '}
+          {error}{' '}
+          {ambiguous ? 'Jika hasil belum pasti, gunakan tombol yang sama atau periksa ' : 'Lihat '}
           <Link to="/orders" className="underline font-semibold">
             riwayat pesanan
           </Link>

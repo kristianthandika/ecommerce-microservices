@@ -38,13 +38,13 @@ assert.equal(page.status, 200);
 assert.match(page.headers['strict-transport-security'], /max-age=/);
 assert.match(page.headers['content-security-policy'], /default-src 'self'/);
 assert.equal(JSON.parse((await request('/api/health')).text).status, 'ok');
-const login = await request('/api/auth/login', {
+const login = await request('/api/v1/auth/login', {
   method: 'POST',
   body: { email: process.env.SEED_ADMIN_EMAIL, password: process.env.SEED_ADMIN_PASSWORD },
 });
 assert.equal(login.status, 200);
 const token = JSON.parse(login.text).token;
-const created = await request('/api/products', {
+const created = await request('/api/v1/products', {
   method: 'POST',
   token,
   body: { name: `TLS ${randomUUID()}`, price: 100, stock: 2 },
@@ -52,16 +52,16 @@ const created = await request('/api/products', {
 assert.equal(created.status, 201);
 const id = JSON.parse(created.text).product.id;
 try {
-  const order = await request('/api/orders', {
+  const order = await request('/api/v1/orders', {
     method: 'POST',
     token,
     key: randomUUID(),
     body: { items: [{ productId: id, quantity: 1 }] },
   });
   assert.equal(order.status, 201);
-  assert.equal(JSON.parse((await request(`/api/products/${id}`)).text).product.stock, 1);
+  assert.equal(JSON.parse((await request(`/api/v1/products/${id}`)).text).product.stock, 1);
 } finally {
-  assert.equal((await request(`/api/products/${id}`, { method: 'DELETE', token })).status, 204);
+  assert.equal((await request(`/api/v1/products/${id}`, { method: 'DELETE', token })).status, 204);
 }
 writeFileSync(
   '.e2e/tls-results.json',
