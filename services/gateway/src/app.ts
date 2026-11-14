@@ -40,13 +40,36 @@ function upstreamFailure(
 }
 
 /**
+ * Route internal service-ke-service (mis. /internal/revocations di auth-service)
+ * tidak pernah boleh lewat gateway. Prefix /auth meneruskan SEMUA path, jadi tanpa
+ * penjaga ini route internal auth-service ikut terbuka. Path di-decode dulu dan
+ * dicocokkan tanpa peduli huruf besar/kecil, karena router Express di belakang juga
+ * tidak membedakannya. Service token tetap menjadi lapis kedua.
+ */
+export function isInternalPath(url: string): boolean {
+  const path = url.split('?')[0];
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // Escape yang rusak dicocokkan apa adanya; upstream akan menolaknya.
+  }
+  return /^\/+(?:v1\/+)?[^/]+\/+internal(?:\/|$)/i.test(decoded);
+}
+
+/**
  * Gateway Backend-for-Frontend (m3.1): satu-satunya pintu masuk publik.
  * Reverse proxy ke tiap service, rate-limit + security header terpusat,
  * correlation ID, aggregated health, dan tracing pengantar.
  */
 export async function buildApp({
   enableTracing = true,
-}: { enableTracing?: boolean } = {}): Promise<FastifyInstance> {
+  onRoute,
+}: {
+  enableTracing?: boolean;
+  /** Dipanggil untuk setiap route yang didaftarkan (inventaris API di tes). */
+  onRoute?: (route: { method: string | string[]; url: string }) => void;
+} = {}): Promise<FastifyInstance> {
   const app = Fastify({
     // Pakai konfigurasi pino kita untuk gateway. Cast ke FastifyBaseLogger
     // supaya tipe instance tetap default (pino Logger adalah superset-nya).
@@ -98,7 +121,14 @@ export async function buildApp({
       }),
   });
 
+  if (onRoute) app.addHook('onRoute', onRoute);
   app.addHook('onRequest', attachCorrelation);
+  app.addHook('onRequest', async (request, reply) => {
+    if (isInternalPath(request.url))
+      return reply
+        .code(404)
+        .send({ error: { message: 'Resource tidak ditemukan', code: 'NOT_FOUND' } });
+  });
 
   // Route tak dikenal memakai bentuk error yang SAMA dengan service di belakang
   // gateway ({ error: { message, code } }) — bukan format bawaan Fastify — dan
@@ -149,10 +179,16 @@ export async function buildApp({
     const sunset = new Date(legacy.sunset).toUTCString();
     await app.register(async (unversioned) => {
       unversioned.addHook('onRequest', async (request, reply) => {
+        // Target dibentuk lewat URL parser: karakter seperti > atau " dari request
+        // di-encode, sehingga tidak bisa menyisipkan parameter ke header Link.
+        const target = new URL(request.url, 'http://gateway.invalid');
         reply
           .header('deprecation', deprecation)
           .header('sunset', sunset)
-          .header('link', `<${publicPrefix}/v1${request.url}>; rel="successor-version"`);
+          .header(
+            'link',
+            `<${publicPrefix}/v1${target.pathname}${target.search}>; rel="successor-version"`,
+          );
         // Siapa yang masih memakai jalur lama menentukan kapan aman dimatikan.
         request.log.info({ legacyPath: request.routeOptions.url }, 'jalur API tanpa versi');
       });

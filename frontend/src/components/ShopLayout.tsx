@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Header } from './Header';
 import { Footer } from './Footer';
+import { EmailVerificationNotice } from './EmailVerificationNotice';
 
 export function ShopLayout({ children }: { children: ReactNode }) {
   return (
@@ -11,6 +12,7 @@ export function ShopLayout({ children }: { children: ReactNode }) {
         tabIndex={-1}
         className="flex-1 w-full min-w-0 max-w-6xl mx-auto px-4 py-8 sm:py-10"
       >
+        <EmailVerificationNotice />
         {children}
       </main>
       <Footer />

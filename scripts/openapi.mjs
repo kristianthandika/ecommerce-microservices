@@ -5,7 +5,8 @@
  * gateway serves at /api/v1/openapi.json.
  *
  * Request bodies and query parameters are converted from the services' own zod
- * schemas, so the document cannot drift from what the services actually validate.
+ * schemas. Refinements that JSON Schema cannot express are described separately;
+ * runtime tests remain authoritative for those constraints.
  * Response schemas are declared here and exported for the E2E contract checks.
  *
  *   node scripts/openapi.mjs           # regenerate
@@ -14,7 +15,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { credentialsSchema } from '../services/auth-service/src/schemas.ts';
+import {
+  credentialsSchema,
+  verifyEmailSchema,
+  outboxQuerySchema,
+} from '../services/auth-service/src/schemas.ts';
 import { productSchema, productUpdateSchema } from '../services/product-service/src/schemas.ts';
 import * as orderSchemas from '../services/order-service/src/schemas.ts';
 
@@ -32,7 +37,22 @@ const ErrorBody = z.object({
     details: z.unknown().optional(),
   }),
 });
-const User = z.object({ id, email: z.email(), role: z.enum(['user', 'admin']) });
+const User = z.object({
+  id,
+  email: z.email(),
+  role: z.enum(['user', 'admin']),
+  emailVerified: z
+    .boolean()
+    .meta({ description: 'false: akun belum boleh membuat pesanan (klaim JWT email_verified)' }),
+});
+const OutboxMessage = z.object({
+  id,
+  to: z.string(),
+  subject: z.string(),
+  text: z.string(),
+  link: z.string().optional().meta({ description: 'Tautan aksi di dalam email' }),
+  createdAt: timestamp,
+});
 const Session = z.object({
   token: z.string().meta({ description: 'Access token JWT RS256' }),
   user: User,
@@ -67,6 +87,12 @@ const CartLine = z.object({
   stock: z.int(),
   available: z.boolean(),
   subtotal: z.int(),
+});
+// Mutations return the stored snapshot; only GET /cart fetches a product quote.
+const CartSnapshot = z.object({
+  version: id,
+  items: z.array(orderSchemas.itemSchema),
+  updatedAt: timestamp,
 });
 const Cart = z.object({
   version: id.meta({ description: 'Sama dengan ETag; kirim kembali sebagai If-Match' }),
@@ -136,6 +162,7 @@ export const responses = {
   ProductPage,
   StockSummary,
   Cart,
+  CartSnapshot,
   Order,
   OrderPage,
   OrderSummary,
@@ -143,14 +170,28 @@ export const responses = {
   ServiceHealth,
   Jwks,
   UserEnvelope: z.object({ user: User }),
+  Outbox: z.object({ messages: z.array(OutboxMessage) }),
+  Accepted: z.object({ sent: z.literal(true) }),
+  Liveness: z.object({ service: z.string(), status: z.literal('ok') }),
   ProductEnvelope: z.object({ product: Product }),
   CartEnvelope: z.object({ cart: Cart }),
+  CartMutationEnvelope: z.object({ cart: CartSnapshot }),
   OrderEnvelope: z.object({ order: Order }),
 };
 const requests = {
-  Credentials: credentialsSchema,
+  Credentials: credentialsSchema.meta({
+    description:
+      'Email di-trim, diubah ke huruf kecil, lalu diperiksa format emailnya. Password minimal ' +
+      '8 unit UTF-16 dan maksimal 72 byte UTF-8. Batas byte dan normalisasi tidak terwakili ' +
+      'sepenuhnya oleh minLength/format JSON Schema.',
+  }),
+  VerifyEmailInput: verifyEmailSchema,
   ProductInput: productSchema,
-  ProductUpdate: productUpdateSchema,
+  ProductUpdate: productUpdateSchema.meta({
+    description:
+      'Minimal satu field name, price, atau stock wajib diisi; expectedRevision saja tidak cukup. ' +
+      'Nama di-trim sebelum validasi. expectedRevision opsional untuk kompatibilitas klien lama.',
+  }),
   OrderInput: orderSchemas.orderSchema,
   CheckoutInput: orderSchemas.checkoutSchema,
   CartQuantity: orderSchemas.quantitySchema,
@@ -233,7 +274,7 @@ const idempotencyKey = { $ref: '#/components/parameters/IdempotencyKey' };
 const requestedWith = { $ref: '#/components/parameters/XRequestedWith' };
 
 const pagination = queryParameters(orderSchemas.paginationSchema, {
-  offset: 'Halaman bernomor; maksimal 10000. Jangan digabung dengan cursor.',
+  offset: 'Halaman bernomor; maksimal 10000. Offset selain 0 tidak boleh digabung dengan cursor.',
   cursor: 'Nilai nextCursor dari halaman sebelumnya (keyset, stabil saat data baru masuk).',
   q: 'Cari pada ID order atau nama penerima.',
 });
@@ -246,9 +287,49 @@ const operations = {
       summary: 'Daftar akun pembeli (role selalu user)',
       requestBody: body('Credentials'),
       responses: {
-        201: json('UserEnvelope', { description: 'Akun dibuat' }),
+        201: json('UserEnvelope', {
+          description: 'Akun dibuat; tautan verifikasi dikirim ke email (emailVerified: false)',
+        }),
         ...errors(400, 409, 429),
       },
+    },
+  },
+  '/auth/verify-email': {
+    post: {
+      operationId: 'verifyEmail',
+      tags: ['auth'],
+      summary: 'Tukar token dari email verifikasi (sekali pakai, 24 jam)',
+      description:
+        'Access token yang sudah terbit tetap berisi email_verified: false sampai sesi di-refresh.',
+      requestBody: body('VerifyEmailInput'),
+      responses: {
+        200: json('UserEnvelope', { description: 'Email terverifikasi' }),
+        ...errors(400, 429),
+      },
+    },
+  },
+  '/auth/email-verification': {
+    post: {
+      operationId: 'resendVerification',
+      tags: ['auth'],
+      summary: 'Kirim ulang email verifikasi untuk pengguna yang login (maks. 1 per menit)',
+      security: bearer,
+      responses: {
+        202: json('Accepted', { description: 'Email dikirim' }),
+        ...errors(401, 409, 429),
+      },
+    },
+  },
+  '/auth/admin/outbox': {
+    get: {
+      operationId: 'trainingOutbox',
+      tags: ['auth', 'admin'],
+      summary: 'Kotak surat pelatihan (admin): email yang "dikirim" sistem',
+      description:
+        'Hanya ada bila MAIL_TRANSPORT=outbox (pelatihan/lokal). Dengan transport webhook route ini 404.',
+      security: bearer,
+      parameters: queryParameters(outboxQuerySchema, { to: 'Alamat penerima persis' }),
+      responses: { 200: json('Outbox'), ...errors(400, 401, 403, 404) },
     },
   },
   '/auth/login': {
@@ -288,8 +369,14 @@ const operations = {
     post: {
       operationId: 'logout',
       tags: ['auth'],
-      summary: 'Cabut sesi refresh di server dan hapus cookie',
-      security: cookie,
+      summary: 'Cabut sesi dari cookie atau bearer dan hapus cookie',
+      description:
+        'Cookie refresh dan bearer JWT bersifat opsional; setiap sesi valid yang disertakan dicabut. ' +
+        'Bearer memungkinkan logout saat cookie telah hilang. Kredensial tidak valid diabaikan ' +
+        'agar logout tetap idempotent, dan tanpa kredensial tidak ada sesi server yang dicabut. ' +
+        'JWT sesi yang dicabut ditolak langsung oleh auth-service; service lain menyegarkan daftar ' +
+        'pencabutan sesuai REVOCATION_MAX_AGE_MS (bawaan 5 detik). Header X-Requested-With tetap wajib.',
+      security: [...cookie, ...bearer, {}],
       parameters: [requestedWith],
       responses: { 204: { description: 'Sesi dicabut' }, ...errors(403, 429) },
     },
@@ -419,7 +506,10 @@ const operations = {
       security: bearer,
       parameters: [ifMatch],
       requestBody: body('CartQuantity'),
-      responses: { 200: json('CartEnvelope', { headers: etag }), ...errors(400, 401, 412, 428) },
+      responses: {
+        200: json('CartMutationEnvelope', { headers: etag }),
+        ...errors(400, 401, 409, 412, 428),
+      },
     },
     delete: {
       operationId: 'removeCartItem',
@@ -427,7 +517,10 @@ const operations = {
       summary: 'Hapus satu produk dari keranjang',
       security: bearer,
       parameters: [ifMatch],
-      responses: { 200: json('CartEnvelope', { headers: etag }), ...errors(400, 401, 412, 428) },
+      responses: {
+        200: json('CartMutationEnvelope', { headers: etag }),
+        ...errors(400, 401, 409, 412, 428),
+      },
     },
   },
   '/cart/checkout': {
@@ -435,12 +528,16 @@ const operations = {
       operationId: 'checkout',
       tags: ['cart', 'orders'],
       summary: 'Checkout keranjang versi tertentu (idempoten)',
+      description:
+        'Email harus terverifikasi. Batas per pengguna berlaku di seluruh pesanan aktif, ' +
+        'termasuk pembatalan yang stoknya belum berhasil dilepas. Bawaan: 5 pesanan dan ' +
+        '10 unit per produk; dapat dikonfigurasi operator.',
       security: bearer,
       parameters: [idempotencyKey],
       requestBody: body('CheckoutInput'),
       responses: {
         201: json('OrderEnvelope', { description: 'Order dibuat atau dikembalikan ulang' }),
-        ...errors(400, 401, 409, 503),
+        ...errors(400, 401, 403, 409, 503),
       },
     },
   },
@@ -457,12 +554,16 @@ const operations = {
       operationId: 'createOrder',
       tags: ['orders'],
       summary: 'Buat order langsung (idempoten, dibatasi per pelanggan)',
+      description:
+        'Email harus terverifikasi. Batas per pengguna berlaku di seluruh pesanan aktif, ' +
+        'termasuk pembatalan yang stoknya belum berhasil dilepas. Bawaan: 5 pesanan dan ' +
+        '10 unit per produk; baris produk duplikat dijumlahkan sebelum pemeriksaan.',
       security: bearer,
       parameters: [idempotencyKey],
       requestBody: body('OrderInput'),
       responses: {
         201: json('OrderEnvelope', { description: 'Order dibuat atau dikembalikan ulang' }),
-        ...errors(400, 401, 409, 503),
+        ...errors(400, 401, 403, 409, 503),
       },
     },
   },
@@ -558,6 +659,15 @@ const operations = {
       responses: { 200: { description: 'OpenAPI 3.1', content: { 'application/json': {} } } },
     },
   },
+  '/': {
+    servers: [{ url: '/api', description: 'Tidak berversi' }],
+    get: {
+      operationId: 'gatewayLiveness',
+      tags: ['operations'],
+      summary: 'Liveness gateway (dipakai healthcheck container)',
+      responses: { 200: json('Liveness') },
+    },
+  },
   '/health': {
     get: {
       operationId: 'gatewayHealth',
@@ -574,15 +684,45 @@ const operations = {
 
 const errorDescriptions = {
   400: 'Request tidak valid (VALIDATION_ERROR, INVALID_CURSOR, INVALID_PRECONDITION, ...)',
-  401: 'Token tidak ada, kedaluwarsa, atau sesi dicabut',
-  403: 'Role tidak cukup, atau permintaan lintas situs (CSRF_REJECTED)',
+  401: 'Token tidak ada, kedaluwarsa, atau sesinya sudah dicabut (SESSION_REVOKED)',
+  403: 'Role tidak cukup, email belum diverifikasi (EMAIL_NOT_VERIFIED), atau CSRF_REJECTED',
   404: 'Tidak ditemukan atau bukan milik pemanggil',
-  409: 'Konflik bisnis: stok, idempotensi, status, HOLD_LIMIT_EXCEEDED, REFRESH_RACE',
+  409: 'Konflik bisnis: stok, idempotensi, status, HOLD_LIMIT_EXCEEDED, REFRESH_RACE, EMAIL_ALREADY_VERIFIED',
   412: 'If-Match tidak cocok dengan versi keranjang (CART_CHANGED)',
+  413: 'Body request melebihi batas ukuran',
   428: 'If-Match wajib dikirim (PRECONDITION_REQUIRED)',
   429: 'Terlalu banyak request; lihat Retry-After',
+  502: 'Respons upstream tidak memenuhi kontrak atau operasi upstream ditolak',
   503: 'Service di belakang tidak terjangkau; aman dicoba ulang dengan key yang sama',
+  504: 'Waktu tunggu upstream habis',
 };
+
+// Errors from middleware/proxies also belong to the public contract. Public
+// operations explicitly declare security: [] so scanners need not guess.
+const methodNames = ['get', 'post', 'put', 'patch', 'delete'];
+const documentedOperations = Object.fromEntries(
+  Object.entries(operations).map(([path, item]) => [
+    path,
+    Object.fromEntries(
+      Object.entries(item).map(([method, operation]) => {
+        if (!methodNames.includes(method)) return [method, operation];
+        const proxied = /^\/(auth|products|orders|cart)(\/|$)/.test(path);
+        const middlewareErrors =
+          path === '/' || path === '/health'
+            ? {}
+            : errors(...(proxied ? [413, 429, 502, 503, 504] : [429]));
+        return [
+          method,
+          {
+            security: [],
+            ...operation,
+            responses: { ...middlewareErrors, ...operation.responses },
+          },
+        ];
+      }),
+    ),
+  ]),
+);
 
 export function buildSpec() {
   return {
@@ -598,6 +738,8 @@ export function buildSpec() {
         '',
         'Dokumen ini dibangkitkan oleh `node scripts/openapi.mjs` dari skema zod tiap service; ' +
           'jangan diedit manual.',
+        'Validasi byte UTF-8, normalisasi, aturan antar-field, dan aturan bisnis tetap ' +
+          'dijalankan oleh service; constraint tersebut dijelaskan pada operasi/skema terkait.',
       ].join('\n'),
     },
     servers: [{ url: '/api/v1', description: 'Gateway melalui frontend (nginx)' }],
@@ -609,7 +751,7 @@ export function buildSpec() {
       { name: 'admin', description: 'Hanya role admin' },
       { name: 'operations', description: 'Health dan metadata' },
     ],
-    paths: operations,
+    paths: documentedOperations,
     components: {
       securitySchemes: {
         bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },

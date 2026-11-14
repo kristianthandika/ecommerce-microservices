@@ -8,6 +8,8 @@ import request from 'supertest';
 const keysDir = mkdtempSync(join(tmpdir(), 'auth-sessions-'));
 process.env.KEYS_DIR = keysDir;
 process.env.LOG_LEVEL = 'silent';
+const SERVICE_TOKEN = 'test-service-token-with-at-least-32-characters';
+process.env.INTERNAL_SERVICE_TOKEN = SERVICE_TOKEN;
 
 let app: import('express').Express;
 let sessions: typeof import('../src/sessions.ts');
@@ -27,9 +29,14 @@ function refreshCookie(res: request.Response) {
     .find((cookie) => cookie.startsWith('refresh_token='));
   return header ? { value: header.split(';')[0].split('=')[1], header } : undefined;
 }
+let signInSequence = 0;
 async function signIn(email: string) {
-  await request(app).post('/register').send({ email, password });
-  const res = await request(app).post('/login').send({ email, password });
+  const clientIp = `192.0.2.${++signInSequence}`;
+  await request(app).post('/register').set('x-forwarded-for', clientIp).send({ email, password });
+  const res = await request(app)
+    .post('/login')
+    .set('x-forwarded-for', clientIp)
+    .send({ email, password });
   expect(res.status).toBe(200);
   return { res, cookie: refreshCookie(res)! };
 }
@@ -94,6 +101,139 @@ describe('access and refresh tokens', () => {
     const after = await refresh(cookie.value);
     expect(after.status).toBe(401);
     expect(after.body.error.code).toBe('INVALID_REFRESH');
+  });
+
+  it('stops accepting the access token of a session that logged out', async () => {
+    const { res, cookie } = await signIn('revoke@test.local');
+    const { sid } = jwt.decode(res.body.token) as { sid: string };
+    expect(sid).toEqual(expect.any(String));
+    const me = () => request(app).get('/me').set('authorization', `Bearer ${res.body.token}`);
+    expect((await me()).status).toBe(200);
+    // A second session of the same user is untouched by the first one's logout.
+    const other = await request(app).post('/login').send({ email: 'revoke@test.local', password });
+    await request(app).post('/logout').set(browser).set('cookie', `refresh_token=${cookie.value}`);
+    const refused = await me();
+    expect(refused.status).toBe(401);
+    expect(refused.body.error.code).toBe('SESSION_REVOKED');
+    expect(
+      (await request(app).get('/me').set('authorization', `Bearer ${other.body.token}`)).status,
+    ).toBe(200);
+
+    // What other services poll: service token required, entry lives past token expiry.
+    expect((await request(app).get('/internal/revocations')).status).toBe(401);
+    const list = await request(app)
+      .get('/internal/revocations')
+      .set('x-service-token', SERVICE_TOKEN);
+    expect(list.status).toBe(200);
+    const entry = list.body.revoked.find((item: { sid: string }) => item.sid === sid);
+    expect(entry.until).toBeGreaterThan(Date.now() + 900_000);
+    expect(sessions.listRevokedSessions(entry.until + 1)).not.toContainEqual(entry);
+  });
+
+  it('revokes access tokens too when a stolen refresh token is detected', () => {
+    const start = sessions.startSession('victim-2', 2_000_000);
+    sessions.rotateSession(start.token, 2_000_000);
+    expect(sessions.isSessionRevoked(start.familyId, 2_000_000)).toBe(false);
+    expect(sessions.rotateSession(start.token, 2_000_000 + 60_000).kind).toBe('reused');
+    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 60_001)).toBe(true);
+    // Keep revocations for the maximum configurable TTL, even if it was reduced on restart.
+    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 60_000 + 961_000)).toBe(true);
+    // Once every possible access token has expired the entry is dropped.
+    expect(sessions.isSessionRevoked(start.familyId, 2_000_000 + 60_000 + 3_661_000)).toBe(false);
+  });
+
+  it('revokes a signed access token even when its refresh cookie is missing', async () => {
+    const { res, cookie } = await signIn('missing-cookie@test.local');
+    const result = await request(app)
+      .post('/logout')
+      .set(browser)
+      .set('authorization', `Bearer ${res.body.token}`);
+    expect(result.status).toBe(204);
+    const denied = await request(app).get('/me').set('authorization', `Bearer ${res.body.token}`);
+    expect(denied.status).toBe(401);
+    expect(denied.body.error.code).toBe('SESSION_REVOKED');
+    expect((await refresh(cookie.value)).status).toBe(401);
+  });
+
+  it('cannot revoke another session by forging the bearer payload', async () => {
+    const { res } = await signIn('forged-logout@test.local');
+    const [header, , signature] = res.body.token.split('.');
+    const payload = jwt.decode(res.body.token) as jwt.JwtPayload;
+    const forged = `${header}.${Buffer.from(JSON.stringify({ ...payload, sub: 'forged' })).toString('base64url')}.${signature}`;
+    expect(
+      (await request(app).post('/logout').set(browser).set('authorization', `Bearer ${forged}`))
+        .status,
+    ).toBe(204);
+    expect(
+      (await request(app).get('/me').set('authorization', `Bearer ${res.body.token}`)).status,
+    ).toBe(200);
+  });
+
+  it('still revokes a valid cookie when the bearer is invalid or expired', async () => {
+    const { getKeyMaterial } = await import('../src/keys.ts');
+    const { config } = await import('../src/config.ts');
+    const { privateKeyPem } = getKeyMaterial();
+    for (const kind of ['invalid', 'expired']) {
+      const { res, cookie } = await signIn(`${kind}-bearer@test.local`);
+      const claims = jwt.decode(res.body.token) as jwt.JwtPayload;
+      const bearer =
+        kind === 'invalid'
+          ? 'malformed'
+          : jwt.sign({ sid: claims.sid }, privateKeyPem, {
+              algorithm: 'RS256',
+              subject: claims.sub,
+              issuer: config.jwt.issuer,
+              audience: 'ecommerce-api',
+              expiresIn: -1,
+            });
+      expect(
+        (
+          await request(app)
+            .post('/logout')
+            .set(browser)
+            .set('authorization', `Bearer ${bearer}`)
+            .set('cookie', `refresh_token=${cookie.value}`)
+        ).status,
+      ).toBe(204);
+      expect((await refresh(cookie.value)).status).toBe(401);
+      expect(
+        (await request(app).get('/me').set('authorization', `Bearer ${res.body.token}`)).status,
+      ).toBe(401);
+    }
+  });
+
+  it('never issues an access token that outlives the remaining refresh session', async () => {
+    const { res } = await signIn('absolute-expiry@test.local');
+    const { accessTokenFor } = await import('../src/users.ts');
+    const { sid } = jwt.decode(res.body.token) as { sid: string };
+    const deadline = Date.now() + 25_500;
+    const access = accessTokenFor(res.body.user.id, sid, deadline);
+    const claims = jwt.decode(access.token) as { iat: number; exp: number };
+    expect(claims.exp).toBe(Math.floor(deadline / 1000));
+    expect(access.expiresIn).toBe(claims.exp - claims.iat);
+    expect(access.expiresIn).toBeLessThanOrEqual(26);
+    expect(() => accessTokenFor(res.body.user.id, sid, Date.now() - 1000)).toThrow(
+      'Sesi tidak berlaku',
+    );
+  });
+
+  it('retains bearer revocations even when the expired family record was swept', async () => {
+    const { res } = await signIn('swept-family@test.local');
+    const { database } = await import('../src/database.ts');
+    const { sid } = jwt.decode(res.body.token) as { sid: string };
+    database.store('refresh_families').delete(sid);
+    expect(
+      (
+        await request(app)
+          .post('/logout')
+          .set(browser)
+          .set('authorization', `Bearer ${res.body.token}`)
+      ).status,
+    ).toBe(204);
+    expect(
+      (await request(app).get('/me').set('authorization', `Bearer ${res.body.token}`)).status,
+    ).toBe(401);
+    expect(sessions.isSessionRevoked(sid)).toBe(true);
   });
 
   it('rejects cross-site refresh attempts (CSRF) and requests without a cookie', async () => {

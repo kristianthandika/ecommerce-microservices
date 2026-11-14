@@ -115,6 +115,17 @@ try {
           .status,
         201,
       );
+    // New accounts may order only after confirming their address (training mailbox).
+    for (const account of [email, `other-${email}`]) {
+      const mailbox = await api(`/auth/admin/outbox?to=${encodeURIComponent(account)}`, {
+        token: admin,
+      });
+      const token = mailbox.data.messages[0].link.split('#token=')[1];
+      assert.equal(
+        (await api('/auth/verify-email', { method: 'POST', body: { token } })).status,
+        200,
+      );
+    }
     buyer = (await api('/auth/login', { method: 'POST', body: { email, password } })).data.token;
     other = (
       await api('/auth/login', { method: 'POST', body: { email: `other-${email}`, password } })

@@ -93,3 +93,34 @@ Branch latihan m12.1–m12.6: di setiap `starter/m12.x` typecheck dan lint lulus
 Bug yang ditemukan saat verifikasi browser dan diperbaiki: widget health memanggil `/api/v1/health`, yang belum ada. Gateway kini juga melayani health di `/v1`, dan E2E kontrak memeriksanya.
 
 Belum dijalankan: linter OpenAPI eksternal (`npx @redocly/cli lint`), karena mengunduh paket dari luar tidak diizinkan di sesi ini. Pemeriksaan struktural (semua `$ref` ter-resolve, parameter path lengkap, `operationId` unik) ada di `versioning.test.ts`. DAST (HawkScan) juga belum dijalankan.
+
+## Penutupan celah OWASP dan sesi (14 November 2026, verifikasi terbaru)
+
+Bagian ini memperbarui status linter dan autentikasi pada catatan historis di atas.
+
+| Pemeriksaan                              | Hasil                                                                                        |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Tes workspace                            | 194 lulus: HTTP client 14, storage 8, auth 43, gateway 22, order 44, product 31, frontend 32 |
+| TypeScript, ESLint, pemeriksaan diff     | Lulus                                                                                        |
+| Generator OpenAPI dan Redocly CLI 2.78.0 | Lulus; tidak ada temuan linter                                                               |
+| Audit dependency online                  | 0 kerentanan yang dilaporkan `npm audit --audit-level=moderate`                              |
+| Build Docker                             | Kelima image dibangun ulang dan container healthy                                            |
+| E2E keamanan/chaos                       | 29/29 lulus melalui nginx dan gateway                                                        |
+| E2E belanja/chaos                        | 11/11 lulus, termasuk kompatibilitas jalur lama dan recovery checkout                        |
+| Browser Chromium                         | 6/6 lulus; tidak ada `pageerror`, fixture dibersihkan                                        |
+| Overlay TLS + mail                       | Validasi konfigurasi Compose gabungan lulus; relay email nyata belum dikonfigurasi           |
+
+Temuan yang ditutup:
+
+- Kuota stok tetap dipakai selama `CANCELLATION_REQUESTED`; permintaan pembatalan yang belum berhasil melepas stok tidak dapat dipakai untuk melewati batas per akun.
+- OpenAPI membedakan kutipan GET keranjang dari record respons PUT/DELETE. Respons mutasi nyata ikut divalidasi dalam E2E. Linter eksternal sekarang menjadi bagian `npm run openapi:check`, termasuk pada workflow CI yang sudah ada.
+- Logout mencabut access token melalui `sid`, termasuk ketika cookie hilang tetapi bearer masih tersedia. Uji Docker mengukur penolakan pada order-service setelah sekitar 5,3 detik; product-service sudah menolak pada pemeriksaan berikutnya. Auth-service menolak langsung. Cache kedaluwarsa saat auth mati menghasilkan 503, dan akses pulih setelah auth kembali.
+- Regresi frontend mencakup refresh yang terlambat setelah logout, kegagalan logout yang harus dapat dicoba ulang, serta timer refresh pada akhir umur sesi. JWT tidak melewati batas umur sesi.
+- Verifikasi email sekali pakai, expiry, cooldown pengiriman ulang, legacy user yang belum terverifikasi, gate checkout/order, pembatasan akses outbox, relay tiruan, serta guard konfigurasi production diuji. Kotak surat simulasi bukan pengiriman email nyata.
+- Uji browser menjalankan registrasi → keranjang → checkout terblokir → tautan outbox admin → verifikasi → checkout → logout → reload. Tampilan header/footer 320 px dan tombol Escape menu ikut diuji.
+
+Artefak lokal: `.e2e/results.json`, `.e2e/shopping-results.json`, dan `.e2e/browser-security-results.json`. Browser runner tersedia sebagai `scripts/e2e-browser-security.mjs`; sediakan Playwright beserta binary Chromium, atau arahkan `PLAYWRIGHT_MODULE` ke `playwright/index.mjs` yang sudah terpasang. Sesi ini memakai paket browser yang telah tersedia, tanpa menambah dependency Playwright ke aplikasi.
+
+Tes frontend pada percobaan sandbox pertama terhalang izin esbuild membaca konfigurasi; eksekusi ulang dengan akses yang sesuai lulus. Docker Desktop yang berhenti dijalankan kembali sebelum build dan E2E. Tidak ada volume data yang dihapus.
+
+Batas verifikasi: tidak ada DAST/HawkScan, pemindaian image OS, uji provider email/inbox nyata, atau eksekusi workflow GitHub dalam sesi ini. CAPTCHA belum dipasang; kontrol yang dipilih adalah verifikasi email bersama kuota per akun dan rate limit. Branch `starter/m12.x` dan `solution/m12.x` tetap snapshot latihan sebelumnya, bukan salinan otomatis dari revisi keamanan terbaru.

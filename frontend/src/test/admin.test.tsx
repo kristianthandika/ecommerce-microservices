@@ -17,6 +17,7 @@ vi.mock('../context/AuthContext', () => ({
 vi.mock('../context/CartContext', () => ({ useCart: () => ({ cart: null }) }));
 beforeEach(() => {
   session.role = 'admin';
+  vi.spyOn(api, 'outbox').mockResolvedValue({ messages: [] });
 });
 afterEach(() => vi.restoreAllMocks());
 describe('admin UI', () => {

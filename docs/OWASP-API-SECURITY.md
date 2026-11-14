@@ -6,18 +6,18 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 
 ## Ringkasan
 
-| Risiko                                               | Status    | Kontrol utama                                                                  |
-| ---------------------------------------------------- | --------- | ------------------------------------------------------------------------------ |
-| API1 Broken Object Level Authorization               | Terpenuhi | Kepemilikan dari klaim `sub` JWT; order orang lain dijawab 404                 |
-| API2 Broken Authentication                           | Sebagian  | RS256 + JWKS, access token 15 menit, refresh token berotasi, backoff per akun  |
-| API3 Broken Object Property Level Authorization      | Terpenuhi | Skema zod membuang field tak dikenal; respons dipetakan ke bentuk publik       |
-| API4 Unrestricted Resource Consumption               | Terpenuhi | Rate limit berlapis, batas body/halaman/offset, query SQL berindeks, timeout   |
-| API5 Broken Function Level Authorization             | Terpenuhi | `requireRole`/`requireAdmin` di server; route internal butuh service token     |
-| API6 Unrestricted Access to Sensitive Business Flows | Sebagian  | Idempotensi, stok atomik, batas tahan per pelanggan; registrasi belum dibatasi |
-| API7 Server Side Request Forgery                     | Terpenuhi | Tidak ada URL dari pengguna; ID divalidasi UUID dan di-encode                  |
-| API8 Security Misconfiguration                       | Terpenuhi | Header keamanan, CORS allowlist, error generik, container non-root read-only   |
-| API9 Improper Inventory Management                   | Terpenuhi | OpenAPI 3.1 dari skema zod, `/api/v1`, alias lama dengan Deprecation/Sunset    |
-| API10 Unsafe Consumption of APIs                     | Terpenuhi | Respons upstream divalidasi skema dan aritmetikanya diperiksa ulang            |
+| Risiko                                               | Status    | Kontrol utama                                                                 |
+| ---------------------------------------------------- | --------- | ----------------------------------------------------------------------------- |
+| API1 Broken Object Level Authorization               | Terpenuhi | Kepemilikan dari klaim `sub` JWT; order orang lain dijawab 404                |
+| API2 Broken Authentication                           | Sebagian  | RS256 + JWKS, access token 15 menit, refresh token berotasi, backoff per akun |
+| API3 Broken Object Property Level Authorization      | Terpenuhi | Skema zod membuang field tak dikenal; respons dipetakan ke bentuk publik      |
+| API4 Unrestricted Resource Consumption               | Terpenuhi | Rate limit berlapis, batas body/halaman/offset, query SQL berindeks, timeout  |
+| API5 Broken Function Level Authorization             | Terpenuhi | `requireRole`/`requireAdmin` di server; route internal butuh service token    |
+| API6 Unrestricted Access to Sensitive Business Flows | Sebagian  | Idempotensi, stok atomik, kuota per akun, verifikasi email sebelum pemesanan  |
+| API7 Server Side Request Forgery                     | Terpenuhi | Tidak ada URL dari pengguna; ID divalidasi UUID dan di-encode                 |
+| API8 Security Misconfiguration                       | Terpenuhi | Header keamanan, CORS allowlist, error generik, container non-root read-only  |
+| API9 Improper Inventory Management                   | Terpenuhi | OpenAPI 3.1 dari skema zod, `/api/v1`, alias lama dengan Deprecation/Sunset   |
+| API10 Unsafe Consumption of APIs                     | Terpenuhi | Respons upstream divalidasi skema dan aritmetikanya diperiksa ulang           |
 
 "Terpenuhi" berarti kontrol yang relevan untuk fitur yang ada sudah diterapkan dan diuji, bukan bahwa risikonya nol.
 
@@ -42,7 +42,7 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 - JWT RS256; verifikasi mengunci algoritme, `iss`, `aud`, `sub`, dan `exp`: [`require-auth.ts`](../services/product-service/src/middleware/require-auth.ts). Token dengan `alg` selain RS256 atau `kid` tidak valid ditolak sebelum mencari key.
 - Kunci publik diambil dari JWKS dengan cache dan cooldown; `kid` palsu tidak bisa menghabiskan kuota fetch: [`signing-keys.ts`](../services/product-service/src/middleware/signing-keys.ts).
 - Access token 15 menit. Refresh token opaque disimpan sebagai hash SHA-256, dikirim sebagai cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`, dirotasi setiap dipakai. Pemakaian ulang token yang sudah dirotasi mencabut seluruh sesi: [`sessions.ts` `rotateSession`](../services/auth-service/src/sessions.ts).
-- Logout mencabut sesi di server. Endpoint cookie dilindungi CSRF tiga lapis (SameSite, header kustom, allowlist Origin): [`routes.ts` `requireSameSiteRequest`](../services/auth-service/src/routes.ts).
+- Logout mencabut keluarga sesi (`sid`) secara durable. Auth menolak langsung; product/order menyinkronkan daftar pencabutan melalui endpoint internal dengan cache 5 detik (ditambah waktu komunikasi). Cache kedaluwarsa tanpa sinkronisasi menjawab 503 `SESSION_CHECK_UNAVAILABLE`, bukan menerima JWT sampai 15 menit. Token tanpa `sid` ditolak. Endpoint cookie dilindungi CSRF tiga lapis (SameSite, header kustom, allowlist Origin): [`routes.ts` `requireSameSiteRequest`](../services/auth-service/src/routes.ts).
 - Login: bcrypt dengan hash umpan untuk email tak dikenal (waktu respons seragam), batas 72 byte, limit per IP 20/menit, dan backoff eksponensial per akun setelah 5 kegagalan, termasuk untuk email yang tidak terdaftar: [`sessions.ts` `assertLoginAllowed`](../services/auth-service/src/sessions.ts).
 - Access token hanya di memory frontend, tidak di `localStorage`.
 
@@ -54,8 +54,8 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 
 **Celah.**
 
-- Access token yang sudah terbit tetap berlaku sampai 15 menit setelah logout atau pencabutan sesi (konsekuensi verifikasi terdistribusi).
-- Kebijakan password hanya panjang minimum 8; belum ada pemeriksaan password bocor, verifikasi email, atau MFA.
+- Propagasi logout mempunyai jeda cache singkat; gangguan sinkronisasi membatasi ketersediaan request terproteksi. Uji regresi mencakup cache kosong/kedaluwarsa, kegagalan upstream, token tanpa `sid`, dan balapan refresh/logout frontend.
+- Kebijakan password hanya panjang minimum 8; belum ada pemeriksaan password bocor atau MFA. Verifikasi email sebelum membuat pesanan sudah diterapkan.
 - Belum ada endpoint ganti password atau ubah role yang mencabut sesi (fungsi pencabutan sudah tersedia di `sessions.ts`).
 
 ## API3 — Broken Object Property Level Authorization
@@ -109,7 +109,7 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 **Kontrol.**
 
 - Checkout: Idempotency-Key wajib, satu snapshot keranjang menghasilkan paling banyak satu order, reservasi stok atomik tanpa overselling. Database menolak stok negatif (`CHECK (stock >= 0)`) sebagai pengaman kedua.
-- Batas tahan per pelanggan: paling banyak `ORDER_MAX_OPEN_ORDERS` (bawaan 5) pesanan aktif dan `ORDER_MAX_UNITS_PER_PRODUCT` (bawaan 10) unit per produk di seluruh pesanan aktif. "Aktif" berarti PENDING atau CONFIRMED yang belum COMPLETED; pesanan yang dibatalkan atau selesai mengembalikan jatah. Penolakan: `409 HOLD_LIMIT_EXCEEDED` dengan `details` (`limit`, `held`, `requested`). Pemeriksaan berjalan di transaksi yang sama dengan pembuatan order, jadi request paralel tidak bisa menembusnya. Retry dengan Idempotency-Key yang sudah dikenal tidak pernah ditolak oleh batas ini: [`orders.ts` `assertWithinHoldLimit`](../services/order-service/src/orders.ts).
+- Batas tahan per pelanggan: paling banyak `ORDER_MAX_OPEN_ORDERS` (bawaan 5) pesanan aktif dan `ORDER_MAX_UNITS_PER_PRODUCT` (bawaan 10) unit per produk di seluruh pesanan aktif. "Aktif" mencakup PENDING, CONFIRMED yang belum COMPLETED, dan CANCELLATION_REQUESTED. Pembatalan baru mengembalikan jatah setelah pelepasan stok berhasil dan status menjadi CANCELLED; pesanan selesai juga mengembalikan jatah. Penolakan: `409 HOLD_LIMIT_EXCEEDED` dengan `details` (`limit`, `held`, `requested`). Pemeriksaan berjalan di transaksi yang sama dengan pembuatan order, jadi request paralel tidak bisa menembusnya. Retry dengan Idempotency-Key yang sudah dikenal tidak pernah ditolak oleh batas ini: [`orders.ts` `assertWithinHoldLimit`](../services/order-service/src/orders.ts).
 - Batas per request: kuantitas maksimal 1000 per produk dan 50 produk per order.
 - Pembatalan oleh admin dapat mengembalikan stok yang ditahan pemesanan berlebihan.
 - Login berulang dari banyak IP terhadap satu akun diperlambat per akun.
@@ -121,7 +121,7 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 
 **Celah.**
 
-- Batas tahan berlaku per akun. Banyak akun hasil registrasi otomatis tetap bisa menahan stok bersama-sama. Registrasi hanya dibatasi 20/menit/IP (bersama login). Batas per jam per IP sengaja tidak dipasang karena peserta satu ruang kelas atau kantor berbagi satu IP publik. Mitigasi yang tepat (CAPTCHA, verifikasi email) membutuhkan layanan pihak ketiga.
+- Akun biasa harus memverifikasi email sebelum membuat order/checkout; akun lama tanpa flag juga perlu verifikasi. Token acak sekali pakai berlaku 24 jam, hash disimpan di database, pengiriman ulang memiliki cooldown. Mode lokal `outbox` hanya simulasi bagi admin; deployment nyata menggunakan relay HTTPS (`docker-compose.mail.yml`). Banyak alamat email terverifikasi masih dapat dimiliki satu orang. CAPTCHA belum diterapkan dan tidak diklaim terpasang; mitigasi saat ini menggabungkan email, kuota per akun, dan rate limit.
 - Belum ada pembayaran, sehingga belum ada kedaluwarsa otomatis untuk pesanan yang tidak dibayar.
 - Nilai bawaan 5 pesanan / 10 unit adalah keputusan bisnis yang bisa diubah lewat environment.
 
@@ -153,7 +153,7 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 
 **Kontrol.**
 
-- Spesifikasi OpenAPI 3.1 yang dapat dibaca mesin: [`services/gateway/openapi.json`](../services/gateway/openapi.json), disajikan di `GET /api/v1/openapi.json`. Skema request dibangkitkan dari skema zod yang dipakai service untuk validasi ([`scripts/openapi.mjs`](../scripts/openapi.mjs)), jadi dokumen tidak bisa berbeda dari validasi sebenarnya. CI menjalankan `npm run openapi:check` dan gagal bila file tertinggal dari kode.
+- Spesifikasi OpenAPI 3.1 yang dapat dibaca mesin: [`services/gateway/openapi.json`](../services/gateway/openapi.json), disajikan di `GET /api/v1/openapi.json`. Skema request dibangkitkan dari skema zod yang dipakai service untuk validasi ([`scripts/openapi.mjs`](../scripts/openapi.mjs)) untuk batasan yang dapat direpresentasikan JSON Schema. Refinement seperti panjang password dalam byte UTF-8 dan hubungan antarfield dijelaskan terpisah dan tetap dibuktikan dengan tes runtime. CI menjalankan `npm run openapi:check` dan gagal bila file tertinggal dari kode.
 - Tes cakupan dua arah di setiap service (`openapi-coverage.test.ts`): setiap route yang diteruskan gateway harus ada di spesifikasi, dan setiap path di spesifikasi harus benar-benar diimplementasikan. Route internal dan `/health` milik service dinyatakan tidak publik secara eksplisit.
 - Versi di path: `/api/v1/...` adalah versi saat ini. Jalur tanpa versi (`/api/...`) tetap dilayani dengan header `Deprecation: @<epoch>` (RFC 9745), `Sunset` 14 Mei 2027 (RFC 8594), dan `Link: </api/v1/...>; rel="successor-version"`. Gateway mencatat setiap pemakaian jalur lama di log, sehingga pemiliknya bisa melihat kapan alias aman dimatikan (`LEGACY_API_ENABLED=false`). Versi yang tidak dikenal (`/api/v2/...`) dijawab 404.
 - `version` di body keranjang (jalur sebelum If-Match) juga diberi header `Deprecation` dengan format yang sama.
@@ -164,7 +164,7 @@ Status per 14 November 2026, cabang `feature/materi-lanjutan`. Bukti "E2E" menga
 - Unit: `versioning.test.ts` (gateway: routing `/v1`, header jalur lama, 404 untuk versi tak dikenal, semua `$ref` ter-resolve, parameter path lengkap, `operationId` unik, tidak ada `/internal`); `openapi-coverage.test.ts` di auth-, product-, dan order-service.
 - E2E: _responses match the published OpenAPI contract_ (respons nyata dari stack Docker divalidasi terhadap skema respons yang sama dengan yang diterbitkan), _unversioned paths still work but announce their successor and sunset_. Suite belanja sengaja tetap memakai jalur tanpa versi dan body `version`, sebagai uji kompatibilitas mundur.
 
-**Celah.** Spesifikasi belum divalidasi dengan linter OpenAPI eksternal (mis. `npx @redocly/cli lint services/gateway/openapi.json`); pemeriksaan struktural dilakukan oleh tes sendiri. Skema respons ditulis di generator, bukan diturunkan dari kode, tetapi diuji terhadap respons nyata di E2E.
+**Validasi dan batas.** `npm run openapi:check` juga menjalankan Redocly CLI dengan versi terkunci; aturan yang dikecualikan beserta alasannya ada di `redocly.yaml`. GET keranjang dan mutasi keranjang memakai skema respons berbeda sesuai implementasi. Skema respons tetap ditulis di generator, sehingga tes terhadap respons nyata wajib dipertahankan. Linter bukan pemindaian DAST.
 
 ## API10 — Unsafe Consumption of APIs
 

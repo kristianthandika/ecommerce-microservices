@@ -89,12 +89,20 @@ Workflow GitHub Actions menjalankan pemeriksaan source, audit dependency, build 
 - **Versi dan inventaris API (OWASP API9).** Gateway melayani `/v1/...`; jalur tanpa versi menjadi alias dengan `Deprecation`, `Sunset` (`LEGACY_API_SUNSET`, bawaan 14 Mei 2027), dan `Link: rel="successor-version"`, dan dapat dimatikan dengan `LEGACY_API_ENABLED=false`. Spesifikasi OpenAPI 3.1 dibangkitkan dari skema zod dan dibandingkan dengan router setiap service oleh tes.
 - **Container.** Root filesystem read-only; hanya volume data/keys dan tmpfs (`/tmp`, cache nginx, masing-masing 64 MB) yang dapat ditulis.
 
-Batas yang belum ditangani:
+Kontrol terbaru dan batas yang tersisa:
 
-- Access token yang sudah terbit tetap berlaku sampai 15 menit setelah logout atau pencabutan sesi.
+- Logout memakai pencabutan keluarga sesi (`sid`). Auth menolak langsung; product/order memakai cache 5 detik (ditambah waktu komunikasi). Cache kedaluwarsa dan auth gagal dihubungi menghasilkan 503, sehingga JWT tidak diterima terus sampai kedaluwarsa. Ketersediaan operasi terproteksi kini bergantung pada sinkronisasi pencabutan.
 - Pencarian nama produk dan order memakai `instr(lower(...))` yang memindai tabel; `lower()` SQLite hanya melipat huruf ASCII. Pakai FTS5 bila katalog sangat besar.
 - Receipt reservasi dan tombstone disimpan selamanya; retensinya menunggu kebijakan retur.
-- Belum ada pembayaran, sehingga order terkonfirmasi langsung menahan stok. Batas tahan berlaku per akun; banyak akun hasil registrasi otomatis tetap bisa menahan stok bersama-sama karena registrasi belum memakai CAPTCHA atau verifikasi email (OWASP API6).
-- Spesifikasi OpenAPI belum divalidasi linter eksternal; pemeriksaan strukturalnya dilakukan tes sendiri.
+- Belum ada pembayaran, sehingga order terkonfirmasi langsung menahan stok. Batas tahan berlaku per akun dan mencakup pembatalan yang belum selesai. Verifikasi email diwajibkan sebelum pemesanan; CAPTCHA belum dipasang dan banyak email terverifikasi masih dapat dimiliki satu orang.
+- OpenAPI diperiksa generator, tes cakupan/kontrak, dan linter Redocly melalui `npm run openapi:check`. Hasil tersebut tidak menggantikan DAST atau penetration test.
+
+## Pengiriman verifikasi email
+
+Compose dasar adalah mode pelatihan: `MAIL_TRANSPORT=outbox` dan `MAIL_ALLOW_INSECURE_OUTBOX=true`. Admin membaca email simulasi pada `/admin/outbox`; tidak ada pengiriman ke inbox nyata. Akun biasa lama tanpa flag verifikasi perlu meminta email setelah login. Token sekali pakai berlaku 24 jam, dan JWT baru diperlukan setelah verifikasi.
+
+Untuk pengiriman nyata, siapkan relay HTTPS yang menerima JSON `{to, subject, text}`, `MAIL_WEBHOOK_TOKEN` dari secret, `FRONTEND_ORIGIN` HTTPS, serta konfigurasi TLS. Jalankan dengan tambahan `-f docker-compose.mail.yml` setelah overlay TLS. Overlay mail mematikan outbox dan memberi auth-service network egress; backend lain tetap pada network internal. Endpoint kotak surat tidak tersedia pada mode webhook. Provider dan pengiriman inbox nyata harus diuji oleh operator sebelum deployment.
+
+Lihat [bab penutupan celah keamanan](materi-lanjutan/08-penutupan-celah-keamanan.md) untuk alur, dampak migrasi, dan praktikum.
 
 Pemetaan lengkap ke OWASP API Security Top 10: [OWASP-API-SECURITY.md](OWASP-API-SECURITY.md).

@@ -10,7 +10,7 @@ function Harness() {
       <span data-testid="ready">{String(auth.ready)}</span>
       <span data-testid="session">{auth.token ?? 'anonymous'}</span>
       <button onClick={() => void auth.login('user@test.local', 'password')}>Login</button>
-      <button onClick={() => auth.logout()}>Logout</button>
+      <button onClick={() => void auth.logout().catch(() => {})}>Logout</button>
     </>
   );
 }
@@ -81,6 +81,21 @@ describe('session lifecycle', () => {
     expect(screen.getByTestId('session')).toHaveTextContent('anonymous');
   });
 
+  it('does not flood refresh when the absolute session deadline is near', async () => {
+    vi.useFakeTimers();
+    const short = token(30);
+    vi.spyOn(api, 'refresh').mockResolvedValue({ token: short, user, expiresIn: 30 });
+    await renderAuth();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(api.refresh).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(api.refresh).toHaveBeenCalledTimes(2);
+  });
+
   it('handles 401 expiry only for the current session', async () => {
     const current = token(3600);
     vi.spyOn(api, 'refresh').mockImplementation(noSession);
@@ -106,6 +121,44 @@ describe('session lifecycle', () => {
       fireEvent.click(screen.getByText('Logout'));
     });
     expect(api.logout).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('session')).toHaveTextContent('anonymous');
+  });
+
+  it('does not restore a session when a renewal finishes after logout', async () => {
+    const current = token(3600);
+    let complete!: (session: { token: string; user: typeof user }) => void;
+    vi.spyOn(api, 'refresh')
+      .mockResolvedValueOnce({ token: current, user })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve;
+          }),
+      );
+    await renderAuth();
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('auth:expired', { detail: current }));
+      fireEvent.click(screen.getByText('Logout'));
+    });
+    await act(async () => {
+      complete({ token: token(900), user });
+    });
+    expect(screen.getByTestId('session')).toHaveTextContent('anonymous');
+  });
+
+  it('keeps the session available to retry when server logout fails', async () => {
+    const current = token(900);
+    vi.spyOn(api, 'refresh').mockResolvedValue({ token: current, user });
+    vi.mocked(api.logout).mockRejectedValueOnce(new ApiError('Tidak dapat menghubungi server', 0));
+    await renderAuth();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Logout'));
+    });
+    expect(screen.getByTestId('session')).toHaveTextContent(current);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Logout'));
+    });
+    expect(api.logout).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId('session')).toHaveTextContent('anonymous');
   });
 });

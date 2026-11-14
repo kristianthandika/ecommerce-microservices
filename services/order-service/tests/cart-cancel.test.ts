@@ -16,7 +16,7 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', {
 });
 const jwk = { ...(createPublicKey(publicKey).export({ format: 'jwk' }) as JsonWebKey), kid: 'k1' };
 const sign = (sub: string, role = 'user') =>
-  jwt.sign({ role }, privateKey, {
+  jwt.sign({ role, sid: 'test-session', email_verified: true }, privateKey, {
     algorithm: 'RS256',
     keyid: 'k1',
     subject: sub,
@@ -52,9 +52,11 @@ beforeAll(async () => {
   process.env.PRODUCT_CB_THRESHOLD = '50';
   process.env.INTERNAL_SERVICE_TOKEN = 'test-service-token-with-at-least-32-characters';
   process.env.AUTH_SERVICE_URL = await listen(
-    createServer((_req, res) => {
+    createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ keys: [jwk] }));
+      res.end(
+        JSON.stringify(req.url === '/internal/revocations' ? { revoked: [] } : { keys: [jwk] }),
+      );
     }),
   );
   product = await import('../../product-service/src/products.ts');

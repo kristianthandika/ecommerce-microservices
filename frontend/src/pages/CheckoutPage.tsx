@@ -15,7 +15,9 @@ const emptyAddress: ShippingAddress = {
   notes: '',
 };
 export function CheckoutPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  // The server refuses orders from unverified accounts; do not offer a button that fails.
+  const unverified = user?.emailVerified === false;
   const { cart, reload } = useCart();
   useEffect(() => {
     void reload().catch(() => {});
@@ -30,7 +32,7 @@ export function CheckoutPage() {
   const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!token || !cart?.canCheckout || lock.current) return;
+    if (!token || !cart?.canCheckout || unverified || lock.current) return;
     lock.current = true;
     setBusy(true);
     setError('');
@@ -189,7 +191,10 @@ export function CheckoutPage() {
               Harga akhir mengikuti harga terbaru saat konfirmasi. Pembayaran online dan perhitungan
               ongkir belum tersedia. Tidak ada penagihan otomatis.
             </p>
-            <button className="button-primary w-full" disabled={busy || !cart.canCheckout}>
+            <button
+              className="button-primary w-full"
+              disabled={busy || !cart.canCheckout || unverified}
+            >
               {busy ? 'Mengonfirmasi...' : 'Konfirmasi pesanan'}
             </button>
           </aside>

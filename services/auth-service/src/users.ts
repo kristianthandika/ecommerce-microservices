@@ -13,12 +13,15 @@ interface User {
   email: string;
   role: 'user' | 'admin';
   passwordHash: string;
+  /** Absent on legacy accounts: regular users must verify before ordering. */
+  emailVerified?: boolean;
 }
 
 export interface PublicUser {
   id: string;
   email: string;
   role: string;
+  emailVerified: boolean;
 }
 
 interface Credentials {
@@ -45,12 +48,13 @@ async function createUser({
   email,
   password,
   role,
-}: Credentials & { role: User['role'] }): Promise<User> {
+  emailVerified,
+}: Credentials & { role: User['role']; emailVerified: boolean }): Promise<User> {
   email = email.trim().toLowerCase();
   if (Buffer.byteLength(password, 'utf8') > 72)
     throw new AppError(400, 'Password maksimal 72 byte UTF-8');
   const passwordHash = await bcrypt.hash(password, config.bcryptSaltRounds);
-  const user: User = { id: randomUUID(), email, role, passwordHash };
+  const user: User = { id: randomUUID(), email, role, passwordHash, emailVerified };
   database.transaction(() => {
     if (!usersByEmail.insert(email, user))
       throw new AppError(409, 'Email sudah terdaftar', undefined, 'EMAIL_TAKEN');
@@ -65,14 +69,17 @@ export async function register({ email, password }: Credentials): Promise<Public
     throw new AppError(409, 'Email sudah terdaftar', undefined, 'EMAIL_TAKEN');
   }
   // Endpoint publik hanya boleh membuat role 'user' (lihat DECISIONS.md).
-  const user = await createUser({ email, password, role: 'user' });
+  const user = await createUser({
+    email,
+    password,
+    role: 'user',
+    emailVerified: !config.emailVerification.required,
+  });
   return publicUser(user);
 }
 
-export async function login({
-  email,
-  password,
-}: Credentials): Promise<{ token: string; user: PublicUser }> {
+/** Checks the credentials. The caller starts the session and issues the tokens. */
+export async function login({ email, password }: Credentials): Promise<PublicUser> {
   email = email.trim().toLowerCase();
   // Per-account backoff, checked BEFORE the password: during a lockout even the
   // right password is refused, so guessing cannot continue. Applied to unknown
@@ -88,34 +95,75 @@ export async function login({
     throw new AppError(401, 'Email atau password salah', undefined, 'INVALID_CREDENTIALS');
   }
   clearLoginFailures(email);
-  return { token: signToken(user), user: publicUser(user) };
+  return publicUser(user);
 }
 
 /**
- * Fresh access token for a refresh. Reads the user again, so a deleted account
- * loses access and a changed role takes effect at the next refresh.
+ * Access token for session `sid` (the refresh-token family). Reads the user again,
+ * so a deleted account loses access, and a changed role or a freshly verified email
+ * takes effect at the next refresh.
  */
-export function accessTokenFor(userId: string): { token: string; user: PublicUser } {
+export function accessTokenFor(
+  userId: string,
+  sid: string,
+  sessionExpiresAt?: number,
+): { token: string; user: PublicUser; expiresIn: number } {
   const user = usersById.get(userId);
   if (!user) throw new AppError(401, 'Sesi tidak berlaku', undefined, 'INVALID_SESSION');
-  return { token: signToken(user), user: publicUser(user) };
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresIn =
+    sessionExpiresAt === undefined
+      ? config.jwt.expiresInSeconds
+      : Math.max(
+          0,
+          Math.min(config.jwt.expiresInSeconds, Math.floor(sessionExpiresAt / 1000) - issuedAt),
+        );
+  if (expiresIn <= 0) throw new AppError(401, 'Sesi tidak berlaku', undefined, 'INVALID_SESSION');
+  return { token: signToken(user, sid, issuedAt, expiresIn), user: publicUser(user), expiresIn };
 }
 
-/** Sign JWT RS256 dengan header `kid` yang cocok dengan JWK endpoint. */
-function signToken(user: User): string {
+/**
+ * Sign JWT RS256 dengan header `kid` yang cocok dengan JWK endpoint. `sid` mengikat
+ * token ke sesinya (untuk pencabutan); `email_verified` memakai nama klaim OIDC.
+ */
+function signToken(user: User, sid: string, issuedAt: number, expiresIn: number): string {
   const { privateKeyPem, kid } = getKeyMaterial();
-  return jwt.sign({ email: user.email, role: user.role }, privateKeyPem, {
+  const claims = {
+    email: user.email,
+    role: user.role,
+    sid,
+    iat: issuedAt,
+    email_verified: user.emailVerified === true || user.role === 'admin',
+  };
+  return jwt.sign(claims, privateKeyPem, {
     algorithm: 'RS256',
     keyid: kid, // → header.kid, dipakai jwks-rsa untuk memilih key
     subject: user.id,
     issuer: config.jwt.issuer,
     audience: 'ecommerce-api',
-    expiresIn: config.jwt.expiresInSeconds,
+    expiresIn,
   });
 }
 
 function publicUser(user: User): PublicUser {
-  return { id: user.id, email: user.email, role: user.role };
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    emailVerified: user.emailVerified === true || user.role === 'admin',
+  };
+}
+
+/** Both lookups hold a copy of the user; they change together or not at all. */
+export function markEmailVerified(id: string): PublicUser | null {
+  return database.transaction(() => {
+    const user = usersById.get(id);
+    if (!user) return null;
+    const verified: User = { ...user, emailVerified: true };
+    usersById.set(id, verified);
+    usersByEmail.set(user.email, verified);
+    return publicUser(verified);
+  });
 }
 
 export function getUserById(id: string): PublicUser | null {
@@ -141,7 +189,7 @@ export async function seedAdmin(logger?: Logger): Promise<void> {
       throw new Error('Seed admin email already belongs to a non-admin account');
     return;
   }
-  await createUser({ email, password, role: 'admin' });
+  await createUser({ email, password, role: 'admin', emailVerified: true });
   logger?.warn(
     { email },
     'Admin bootstrap dibuat melalui konfigurasi eksplisit — HANYA untuk training, ganti di production',

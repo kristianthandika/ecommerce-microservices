@@ -41,6 +41,24 @@ export function AdminPage() {
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(0);
+  const [trainingMailAvailable, setTrainingMailAvailable] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setTrainingMailAvailable(false);
+    if (token) {
+      api.outbox(token, 1).then(
+        () => {
+          if (active) setTrainingMailAvailable(true);
+        },
+        () => {
+          /* Real email transports do not expose a training mailbox. */
+        },
+      );
+    }
+    return () => {
+      active = false;
+    };
+  }, [token]);
   useEffect(() => {
     if (!token) return;
     let active = true;
@@ -203,6 +221,11 @@ export function AdminPage() {
             Pesanan
           </button>
         </div>
+        {trainingMailAvailable && (
+          <Link className="button-secondary" to="/admin/outbox">
+            Kotak surat pelatihan
+          </Link>
+        )}
         {tab === 'products' && (
           <button
             className="button-primary"

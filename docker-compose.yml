@@ -31,6 +31,18 @@ services:
       SEED_ADMIN_ENABLED: ${SEED_ADMIN_ENABLED:-false}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      # Service lain mengambil daftar sesi yang dicabut dengan token ini.
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+      # Verifikasi email (OWASP API6). 'outbox' = email disimpan dan terbaca admin di
+      # /admin/outbox: HANYA untuk pelatihan. Production: MAIL_TRANSPORT=webhook +
+      # MAIL_WEBHOOK_URL (+ MAIL_WEBHOOK_TOKEN), dan jaringan yang bisa menjangkaunya.
+      EMAIL_VERIFICATION_REQUIRED: ${EMAIL_VERIFICATION_REQUIRED:-true}
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-outbox}
+      # Explicit opt-in for the local training mailbox; use docker-compose.mail.yml for real delivery.
+      MAIL_ALLOW_INSECURE_OUTBOX: ${MAIL_ALLOW_INSECURE_OUTBOX:-true}
+      MAIL_WEBHOOK_URL: ${MAIL_WEBHOOK_URL:-}
+      MAIL_WEBHOOK_TOKEN: ${MAIL_WEBHOOK_TOKEN:-}
+      PUBLIC_APP_URL: ${FRONTEND_ORIGIN:-http://localhost:3000}
       # Origin browser yang boleh memakai cookie refresh (pertahanan CSRF lapis 3).
       REFRESH_ALLOWED_ORIGINS: ${FRONTEND_ORIGIN:-http://localhost:3000},http://127.0.0.1:3000
     volumes: [auth-keys:/app/services/auth-service/keys, auth-data:/app/data]
@@ -52,6 +64,7 @@ services:
       PORT: 3002
       DATA_DIR: /app/data
       AUTH_SERVICE_URL: http://auth-service:3001
+      REVOCATION_MAX_AGE_MS: ${REVOCATION_MAX_AGE_MS:-5000}
       JWT_ISSUER: ${JWT_ISSUER:-auth-service}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -77,6 +90,9 @@ services:
       DATA_DIR: /app/data
       AUTH_SERVICE_URL: http://auth-service:3001
       PRODUCT_SERVICE_URL: http://product-service:3002
+      REVOCATION_MAX_AGE_MS: ${REVOCATION_MAX_AGE_MS:-5000}
+      ORDER_MAX_OPEN_ORDERS: ${ORDER_MAX_OPEN_ORDERS:-5}
+      ORDER_MAX_UNITS_PER_PRODUCT: ${ORDER_MAX_UNITS_PER_PRODUCT:-10}
       JWT_ISSUER: ${JWT_ISSUER:-auth-service}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}

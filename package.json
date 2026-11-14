@@ -23,10 +23,12 @@
     "test:e2e": "node scripts/e2e.mjs",
     "test:shopping": "node scripts/e2e-shopping.mjs",
     "openapi": "node scripts/openapi.mjs",
-    "openapi:check": "node scripts/openapi.mjs --check"
+    "openapi:check": "node scripts/openapi.mjs --check && npm run openapi:lint",
+    "openapi:lint": "redocly lint services/gateway/openapi.json"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@redocly/cli": "2.78.0",
     "@types/node": "^24.19.2",
     "concurrently": "^9.1.2",
     "eslint": "^9.17.0",

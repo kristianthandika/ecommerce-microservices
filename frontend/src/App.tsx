@@ -10,6 +10,8 @@ import { CheckoutPage } from './pages/CheckoutPage';
 import { OrdersPage } from './pages/OrdersPage';
 import { OrderDetailPage } from './pages/OrderDetailPage';
 import { AdminPage } from './pages/AdminPage';
+import { OutboxPage } from './pages/OutboxPage';
+import { VerifyEmailPage } from './pages/VerifyEmailPage';
 
 export default function App() {
   return (
@@ -20,6 +22,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+            <Route path="/verify-email" element={<VerifyEmailPage />} />
             <Route
               path="/cart"
               element={
@@ -57,6 +60,14 @@ export default function App() {
               element={
                 <ProtectedRoute admin>
                   <AdminPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/outbox"
+              element={
+                <ProtectedRoute admin>
+                  <OutboxPage />
                 </ProtectedRoute>
               }
             />

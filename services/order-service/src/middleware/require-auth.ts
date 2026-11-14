@@ -1,9 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt, { type JwtPayload } from 'jsonwebtoken';
 import { JwksClient } from 'jwks-rsa';
+import { z } from 'zod';
 import { config } from '../config.ts';
 import { AppError } from './errors.ts';
 import { createSigningKeyResolver } from './signing-keys.ts';
+import { createRevocationChecker, fetchRevocationSnapshot } from './revocations.ts';
 
 /**
  * Distributed auth (m2.1): verifikasi JWT TANPA memanggil auth-service di tiap
@@ -30,6 +32,23 @@ const getSigningKey = createSigningKeyResolver(async () => {
   const keys = await client.getSigningKeys();
   return new Map(keys.map((key) => [key.kid, key.getPublicKey()]));
 });
+
+// Sesi yang dicabut (logout, refresh token dicuri). Daftarnya pendek dan diambil
+// paling sering sekali per REVOCATION_MAX_AGE_MS; respons auth-service tetap
+// divalidasi seperti input asing lainnya.
+const revocationList = z.object({
+  revoked: z.array(z.object({ sid: z.string().min(1).max(64), until: z.number() })).max(100_000),
+});
+const isRevoked = createRevocationChecker(
+  async () => {
+    const snapshot = await fetchRevocationSnapshot(
+      `${config.authServiceUrl}/internal/revocations`,
+      config.internalServiceToken,
+    );
+    return revocationList.parse(snapshot).revoked.map((entry) => entry.sid);
+  },
+  { maxAgeMs: config.revocationMaxAgeMs, cooldownMs: config.revocationMaxAgeMs },
+);
 
 export async function requireAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization || '';
@@ -64,8 +83,12 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     !req.user ||
     typeof req.user.sub !== 'string' ||
     !req.user.sub ||
-    typeof req.user.exp !== 'number'
+    typeof req.user.exp !== 'number' ||
+    typeof req.user.sid !== 'string' ||
+    !/^[A-Za-z0-9_-]{1,64}$/.test(req.user.sid)
   )
     throw new AppError(401, 'Klaim token tidak valid');
+  if (await isRevoked(req.user.sid))
+    throw new AppError(401, 'Sesi sudah berakhir', undefined, 'SESSION_REVOKED');
   next();
 }

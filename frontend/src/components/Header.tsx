@@ -34,6 +34,8 @@ export function Header() {
   const { cart } = useCart();
   const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
   const menuId = useId();
   useEffect(() => {
     setMenuOpen(false);
@@ -132,7 +134,20 @@ export function Header() {
             <button
               className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-medium text-slate-500 transition-colors hover:bg-red-50 hover:text-danger"
               type="button"
-              onClick={logout}
+              disabled={signingOut}
+              onClick={async () => {
+                setSigningOut(true);
+                setLogoutError('');
+                try {
+                  await logout();
+                } catch {
+                  setLogoutError(
+                    'Sesi belum berhasil ditutup di server. Periksa koneksi lalu coba Keluar lagi.',
+                  );
+                } finally {
+                  setSigningOut(false);
+                }
+              }}
               aria-label="Keluar"
             >
               <svg
@@ -148,7 +163,7 @@ export function Header() {
               >
                 <path d="M9 5H5v14h4 M14 8l4 4-4 4 M9 12h12" />
               </svg>
-              <span className="hidden xl:inline">Keluar</span>
+              <span className="hidden xl:inline">{signingOut ? 'Menutup sesi...' : 'Keluar'}</span>
             </button>
             <button
               type="button"
@@ -185,6 +200,11 @@ export function Header() {
           </Link>
         )}
       </div>
+      {logoutError && (
+        <p role="alert" className="mx-auto max-w-6xl px-4 pb-3 text-sm text-danger">
+          {logoutError}
+        </p>
+      )}
       {user && menuOpen && (
         <nav
           id={menuId}

@@ -11,6 +11,9 @@ export const config = {
   productServiceUrl: process.env.PRODUCT_SERVICE_URL || 'http://localhost:3002',
   jwtIssuer: process.env.JWT_ISSUER || 'auth-service',
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  // Umur maksimum daftar sesi yang dicabut sebelum diambil ulang dari auth-service:
+  // batas atas jeda antara logout dan penolakan access token di service ini.
+  revocationMaxAgeMs: Number(process.env.REVOCATION_MAX_AGE_MS || 5000),
   // Berapa lama Idempotency-Key diingat setelah order-nya selesai (jam → ms).
   idempotencyRetentionMs: Number(process.env.IDEMPOTENCY_RETENTION_HOURS || 24) * 3_600_000,
   // OWASP API6: batas stok yang boleh ditahan satu pelanggan dalam pesanan aktif
@@ -43,6 +46,12 @@ if (
   config.idempotencyRetentionMs > 720 * 3_600_000
 )
   throw new Error('IDEMPOTENCY_RETENTION_HOURS must be an integer between 1 and 720');
+if (
+  !Number.isInteger(config.revocationMaxAgeMs) ||
+  config.revocationMaxAgeMs < 500 ||
+  config.revocationMaxAgeMs > 60_000
+)
+  throw new Error('REVOCATION_MAX_AGE_MS must be an integer between 500 and 60000');
 for (const [name, value] of Object.entries(config.holdLimit))
   if (!Number.isInteger(value) || value < 1 || value > 1000)
     throw new Error(`Invalid hold limit: ${name} must be an integer between 1 and 1000`);

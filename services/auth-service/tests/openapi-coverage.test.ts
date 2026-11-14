@@ -13,8 +13,10 @@ const spec = JSON.parse(
 type Layer = { route?: { path: string; methods: Record<string, boolean> } };
 
 /** Public path (as the gateway exposes it) for a router path, or null if not exposed. */
-// Gateway: /auth/* → auth-service /* (every route, health and JWKS included).
-const expose = (path: string): string | null => `/auth${path}`;
+// Gateway: /auth/* → auth-service /* (every route, health and JWKS included),
+// except /internal/*, which the gateway refuses to forward.
+const expose = (path: string): string | null =>
+  path.startsWith('/internal/') ? null : `/auth${path}`;
 const owned = (path: string) => path.startsWith('/auth/');
 
 const toSpecPath = (path: string) => path.replace(/:(\w+)/g, '{$1}');

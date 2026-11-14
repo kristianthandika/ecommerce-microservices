@@ -6,6 +6,7 @@ import { createLogger, createHttpLogger, type Logger } from '@ecommerce/logger';
 import { config } from './config.ts';
 import { buildRouter } from './routes.ts';
 import { errorHandler, notFoundHandler } from './middleware/errors.ts';
+import { hasServiceToken } from './middleware/service-token.ts';
 
 /**
  * Factory Express app — mengembalikan `app` TANPA memanggil `listen()`, supaya
@@ -27,9 +28,10 @@ export function createApp({
   app.use(
     rateLimit({
       windowMs: 60 * 1000,
-      // JWKS diambil service lain (bukan user) — jangan sampai kuota per-IP
-      // menghalangi product/order-service memverifikasi token.
-      skip: (req) => req.path === '/health' || req.path === '/.well-known/jwks.json',
+      // JWKS dan daftar pencabutan diambil service lain (bukan user) — jangan sampai
+      // kuota per-IP menghalangi product/order-service memverifikasi token.
+      skip: (req) =>
+        req.path === '/health' || req.path === '/.well-known/jwks.json' || hasServiceToken(req),
       handler: (_req, res) =>
         res
           .status(429)
@@ -54,7 +56,7 @@ export function createApp({
     }),
   );
   app.use(
-    ['/refresh', '/logout'],
+    ['/refresh', '/logout', '/verify-email', '/email-verification'],
     rateLimit({
       windowMs: 60000,
       limit: 60,

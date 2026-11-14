@@ -19,6 +19,7 @@ let app: FastifyInstance;
 const doubles: Server[] = [];
 const echo = (name: string) =>
   createServer((req, res) => {
+    upstreamHits++;
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ service: name, path: req.url }));
   });
@@ -30,13 +31,22 @@ const listen = (server: Server): Promise<string> =>
     }),
   );
 
+const registered: { method: string; url: string }[] = [];
+let upstreamHits = 0;
+
 beforeAll(async () => {
   process.env.LOG_LEVEL = 'silent';
+  process.env.GATEWAY_RATE_LIMIT_MAX = '1000';
   process.env.AUTH_SERVICE_URL = await listen(echo('auth'));
   process.env.PRODUCT_SERVICE_URL = await listen(echo('product'));
   process.env.ORDER_SERVICE_URL = await listen(echo('order'));
   const { buildApp } = await import('../src/app.ts');
-  app = await buildApp({ enableTracing: false });
+  app = await buildApp({
+    enableTracing: false,
+    onRoute: ({ method, url }) => {
+      for (const one of [method].flat()) registered.push({ method: one, url });
+    },
+  });
   await app.ready();
 });
 afterAll(async () => {
@@ -71,6 +81,42 @@ describe('versioned routing', () => {
       const response = await app.inject({ method: 'GET', url });
       expect(response.json().services, url).toBeDefined();
     }
+  });
+
+  it('never forwards internal service routes, however the path is spelled', async () => {
+    const before = upstreamHits;
+    for (const url of [
+      '/v1/auth/internal/revocations',
+      '/auth/internal/revocations',
+      '/v1/auth/INTERNAL/revocations',
+      '/v1/auth/%69nternal/revocations',
+      '/v1/auth//internal/revocations',
+      '/v1/auth/internal',
+      '/v1/products/internal/reservations/x',
+    ]) {
+      const response = await app.inject({
+        method: 'GET',
+        url,
+        headers: { 'x-service-token': 'guessed' },
+      });
+      expect(response.statusCode, url).toBe(404);
+      expect(response.json().error.code).toBe('NOT_FOUND');
+    }
+    expect(upstreamHits).toBe(before);
+    // Ordinary paths that merely contain the word are unaffected.
+    expect((await app.inject({ method: 'GET', url: '/v1/products?q=internal' })).statusCode).toBe(
+      200,
+    );
+  });
+
+  it('encodes the successor link so a request cannot inject Link parameters', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/products?q=>;%20rel="next"&x=<y>',
+    });
+    expect(response.headers.link).toMatch(
+      /^<\/api\/v1\/products\?[^<>"\s]*>; rel="successor-version"$/,
+    );
   });
 
   it('answers unknown versions with the uniform 404', async () => {
@@ -135,9 +181,29 @@ describe('OpenAPI document', () => {
     }
   });
 
+  it('lists every route the gateway itself serves', () => {
+    // Everything outside the proxied prefixes is implemented by the gateway.
+    const own = new Set(
+      registered
+        .filter(({ method }) => method !== 'HEAD' && method !== 'OPTIONS')
+        .filter(({ url }) => !/^\/(v1\/)?(auth|products|orders|cart)(\/|$)/.test(url))
+        .map(({ method, url }) => `${method} ${url}`),
+    );
+    expect([...own].sort()).toEqual([
+      'GET /',
+      'GET /health',
+      'GET /v1/health',
+      'GET /v1/openapi.json',
+    ]);
+    for (const path of ['/', '/health', '/openapi.json'])
+      expect(spec.paths[path]?.get, path).toBeDefined();
+  });
+
   it('documents only what the gateway exposes', () => {
     for (const path of Object.keys(spec.paths))
-      expect(path, path).toMatch(/^\/(auth|products|orders|cart)(\/|$)|^\/(openapi\.json|health)$/);
+      expect(path, path).toMatch(
+        /^\/(auth|products|orders|cart)(\/|$)|^\/(openapi\.json|health)?$/,
+      );
     // Internal service-to-service routes must never appear in the public description.
     expect(JSON.stringify(spec.paths)).not.toContain('/internal');
   });

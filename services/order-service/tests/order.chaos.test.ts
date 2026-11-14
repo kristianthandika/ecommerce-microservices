@@ -23,7 +23,7 @@ const kid = createHash('sha256')
   .update(JSON.stringify({ e: jwkBase.e, kty: jwkBase.kty, n: jwkBase.n }))
   .digest('base64url');
 const jwk = { ...jwkBase, kid, use: 'sig', alg: 'RS256' };
-const token = jwt.sign({ role: 'user' }, privateKey, {
+const token = jwt.sign({ role: 'user', sid: 'test-session', email_verified: true }, privateKey, {
   algorithm: 'RS256',
   keyid: kid,
   subject: 'user-1',
@@ -59,6 +59,9 @@ beforeAll(async () => {
     if (req.url?.startsWith('/.well-known/jwks.json')) {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ keys: [jwk] }));
+    } else if (req.url === '/internal/revocations') {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ revoked: [] }));
     } else {
       res.statusCode = 404;
       res.end();

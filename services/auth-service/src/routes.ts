@@ -1,13 +1,25 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
+import jwt from 'jsonwebtoken';
 import { AppError } from './middleware/errors.ts';
 import { validate } from './middleware/validate.ts';
 import { requireAuth } from './middleware/require-auth.ts';
+import { requireAdmin } from './middleware/require-role.ts';
+import { requireServiceToken } from './middleware/service-token.ts';
 import { getKeyMaterial } from './keys.ts';
 import { register, login, getUserById, accessTokenFor } from './users.ts';
 import { config } from './config.ts';
-import { credentialsSchema } from './schemas.ts';
-import { startSession, rotateSession, endSession, endSessionForMissingUser } from './sessions.ts';
+import { credentialsSchema, verifyEmailSchema, outboxQuerySchema } from './schemas.ts';
+import {
+  startSession,
+  rotateSession,
+  endSession,
+  endAccessSession,
+  endSessionForMissingUser,
+  listRevokedSessions,
+} from './sessions.ts';
+import { sendVerification, resendVerification, verifyEmail } from './verification.ts';
+import { listOutbox } from './mailer.ts';
 
 type Credentials = z.infer<typeof credentialsSchema>;
 
@@ -32,7 +44,7 @@ function readRefreshCookie(req: Request): string | undefined {
 function sendSession(
   res: Response,
   session: { token: string; expiresAt: number },
-  body: { token: string; user: unknown },
+  body: { token: string; user: unknown; expiresIn: number },
 ): void {
   res.cookie(config.refresh.cookieName, session.token, {
     ...cookieOptions(),
@@ -40,7 +52,7 @@ function sendSession(
   });
   // Token tidak boleh tersimpan di cache browser/proxy mana pun.
   res.set('Cache-Control', 'no-store');
-  res.json({ ...body, expiresIn: config.jwt.expiresInSeconds });
+  res.json(body);
 }
 
 /**
@@ -75,13 +87,54 @@ export function buildRouter(): Router {
   // diteruskan ke error handler oleh Express 5.
   router.post('/register', validate(credentialsSchema), async (req: Request, res: Response) => {
     const user = await register(req.validated as Credentials);
+    // Akun sudah tersimpan; email yang gagal terkirim bisa diminta ulang setelah login.
+    if (!user.emailVerified)
+      await sendVerification(user).catch((err: unknown) =>
+        req.log?.error({ err }, 'email verifikasi gagal dikirim'),
+      );
     res.status(201).json({ user });
   });
 
-  router.post('/login', validate(credentialsSchema), async (req: Request, res: Response) => {
-    let result: Awaited<ReturnType<typeof login>>;
+  // Tautan di email membawa token di fragment URL; halaman frontend mengirimnya ke sini.
+  router.post('/verify-email', validate(verifyEmailSchema), (req: Request, res: Response) => {
+    const { token } = req.validated as { token: string };
+    res.set('Cache-Control', 'no-store');
+    res.json({ user: verifyEmail(token) });
+  });
+
+  // Kirim ulang untuk pengguna yang sedang login (satu email per menit per akun).
+  router.post('/email-verification', requireAuth, async (req: Request, res: Response) => {
     try {
-      result = await login(req.validated as Credentials);
+      await resendVerification(String(req.user?.sub));
+    } catch (err) {
+      if (err instanceof AppError && err.code === 'VERIFICATION_THROTTLED')
+        res.set(
+          'Retry-After',
+          String((err.details as { retryAfterSeconds: number }).retryAfterSeconds),
+        );
+      throw err;
+    }
+    res.status(202).json({ sent: true });
+  });
+
+  // Kotak surat pelatihan: hanya ada bila email TIDAK benar-benar dikirim keluar.
+  if (config.mail.transport === 'outbox')
+    router.get('/admin/outbox', requireAuth, requireAdmin, (req: Request, res: Response) => {
+      res.set('Cache-Control', 'no-store');
+      res.json({ messages: listOutbox(outboxQuerySchema.parse(req.query)) });
+    });
+
+  // Internal (service-ke-service): daftar sesi yang dicabut. Diblokir di gateway dan
+  // wajib service token.
+  router.get('/internal/revocations', requireServiceToken, (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ revoked: listRevokedSessions() });
+  });
+
+  router.post('/login', validate(credentialsSchema), async (req: Request, res: Response) => {
+    let user: Awaited<ReturnType<typeof login>>;
+    try {
+      user = await login(req.validated as Credentials);
     } catch (err) {
       if (err instanceof AppError && err.code === 'LOGIN_THROTTLED')
         res.set(
@@ -90,7 +143,8 @@ export function buildRouter(): Router {
         );
       throw err;
     }
-    sendSession(res, startSession(result.user.id), result);
+    const session = startSession(user.id);
+    sendSession(res, session, accessTokenFor(user.id, session.familyId, session.expiresAt));
   });
 
   // Tukar refresh token (cookie HttpOnly) dengan access token baru + refresh token baru.
@@ -116,7 +170,7 @@ export function buildRouter(): Router {
       }
       let access: ReturnType<typeof accessTokenFor>;
       try {
-        access = accessTokenFor(rotation.userId);
+        access = accessTokenFor(rotation.userId, rotation.familyId, rotation.expiresAt);
       } catch (err) {
         endSessionForMissingUser(rotation.token);
         throw err;
@@ -133,6 +187,30 @@ export function buildRouter(): Router {
   router.post('/logout', requireSameSiteRequest, (req: Request, res: Response) => {
     const presented = readRefreshCookie(req);
     if (presented) endSession(presented);
+    // A cleared/expired refresh cookie must not leave the browser's access token
+    // usable. Validate an optional bearer independently, preserving idempotent logout.
+    const [scheme, token] = (req.headers.authorization ?? '').split(' ');
+    if (scheme === 'Bearer' && token) {
+      let claims: jwt.JwtPayload | undefined;
+      try {
+        const decoded = jwt.verify(token, getKeyMaterial().publicKeyPem, {
+          algorithms: ['RS256'],
+          issuer: config.jwt.issuer,
+          audience: 'ecommerce-api',
+        });
+        if (typeof decoded !== 'string') claims = decoded;
+      } catch {
+        /* A bad bearer must not prevent revoking a valid refresh cookie. */
+      }
+      if (
+        typeof claims?.sid === 'string' &&
+        /^[A-Za-z0-9_-]{1,64}$/.test(claims.sid) &&
+        typeof claims.sub === 'string' &&
+        claims.sub &&
+        typeof claims.exp === 'number'
+      )
+        endAccessSession(claims.sid);
+    }
     res.clearCookie(config.refresh.cookieName, cookieOptions());
     res.status(204).end();
   });

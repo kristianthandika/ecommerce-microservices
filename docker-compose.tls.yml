@@ -4,8 +4,11 @@ services:
     environment:
       SEED_ADMIN_PASSWORD: ''
       SEED_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      INTERNAL_SERVICE_TOKEN: ''
+      INTERNAL_SERVICE_TOKEN_FILE: /run/secrets/service_token
+      PUBLIC_APP_URL: ${FRONTEND_ORIGIN:-https://localhost:443}
       REFRESH_ALLOWED_ORIGINS: https://localhost,https://localhost:${HTTPS_PORT:-443},https://127.0.0.1:${HTTPS_PORT:-443}
-    secrets: [admin_password]
+    secrets: [admin_password, service_token]
   product-service:
     environment:
       INTERNAL_SERVICE_TOKEN: ''

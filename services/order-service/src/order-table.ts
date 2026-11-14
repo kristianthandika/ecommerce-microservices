@@ -215,11 +215,11 @@ export function orderSummary() {
 
 /**
  * What a customer currently holds: orders that took (or are about to take) stock and
- * have not been completed. Orders being cancelled are excluded, since their stock is
- * on its way back.
+ * have not been completed. Cancellation intent still counts until the release has
+ * succeeded: a failed compensation must not free quota while stock remains held.
  */
 export function heldByCustomer(userId: string): { openOrders: number; units: Map<string, number> } {
-  const open = `o.user_id = ? AND o.status IN ('PENDING', 'CONFIRMED')
+  const open = `o.user_id = ? AND o.status IN ('PENDING', 'CONFIRMED', 'CANCELLATION_REQUESTED')
                 AND o.fulfillment_status <> 'COMPLETED'`;
   const openOrders = Number(
     database.statement(`SELECT count(*) AS count FROM orders o WHERE ${open}`).get(userId)?.count,

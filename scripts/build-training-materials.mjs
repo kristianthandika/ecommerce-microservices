@@ -47,6 +47,7 @@ const packs = [
       '03-referensi-api.md',
       '05-peta-kode-dan-pengujian.md',
       '07-keamanan-api-owasp.md',
+      '08-penutupan-celah-keamanan.md',
     ],
   },
   {

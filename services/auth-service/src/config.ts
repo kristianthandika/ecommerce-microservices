@@ -11,13 +11,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  */
 export const config = {
   serviceName: 'auth-service',
+  // Dipakai service lain untuk mengambil daftar sesi yang dicabut (route internal).
+  internalServiceToken: readSecret('INTERNAL_SERVICE_TOKEN'),
   port: Number(process.env.PORT || process.env.AUTH_SERVICE_PORT || 3001),
   // Folder penyimpanan keypair RSA — di-mount sebagai Docker volume di m4.4.
   keysDir: process.env.KEYS_DIR || resolve(__dirname, '..', 'keys'),
   jwt: {
     issuer: process.env.JWT_ISSUER || 'auth-service',
-    // Pendek: token yang sudah terbit tidak bisa dicabut, jadi masa berlakunya
-    // adalah jendela terlama akses setelah logout/pencabutan sesi.
+    // Daftar pencabutan harus segar untuk menerima token di service lain.
+    // Jika auth tidak terjangkau setelah cache basi, request terproteksi dijawab 503.
     expiresInSeconds: Number(process.env.JWT_EXPIRES_IN_SECONDS || 900),
   },
   refresh: {
@@ -45,6 +47,23 @@ export const config = {
     maxDelayMs: 15 * 60_000,
     windowMs: 15 * 60_000,
   },
+  emailVerification: {
+    // Akun baru harus memverifikasi email sebelum boleh membuat pesanan (OWASP API6).
+    required: process.env.EMAIL_VERIFICATION_REQUIRED !== 'false',
+    ttlMs: 24 * 3_600_000,
+    resendCooldownMs: 60_000,
+  },
+  mail: {
+    // 'outbox' = disimpan di database dan terbaca admin (pelatihan/lokal saja);
+    // 'webhook' = POST JSON ke layanan email milik operator. Di production wajib dipilih.
+    transport: (process.env.MAIL_TRANSPORT ||
+      (process.env.NODE_ENV === 'production' ? '' : 'outbox')) as 'outbox' | 'webhook' | '',
+    allowInsecureOutbox: process.env.MAIL_ALLOW_INSECURE_OUTBOX === 'true',
+    webhookUrl: process.env.MAIL_WEBHOOK_URL || '',
+    webhookToken: readSecret('MAIL_WEBHOOK_TOKEN'),
+    // Alamat frontend yang dilihat pengguna; dasar tautan di dalam email.
+    publicAppUrl: (process.env.PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, ''),
+  },
   bcryptSaltRounds: Number(process.env.BCRYPT_SALT_ROUNDS || 10),
   // Kredensial admin demo (HANYA untuk training — lihat DECISIONS.md).
   seedAdmin: {
@@ -62,8 +81,43 @@ if (
   config.bcryptSaltRounds > 14
 )
   throw new Error('BCRYPT_SALT_ROUNDS must be 10-14');
-if (process.env.NODE_ENV === 'production' && !process.env.DATA_DIR)
-  throw new Error('DATA_DIR is required in production');
+if (
+  process.env.NODE_ENV === 'production' &&
+  (!process.env.DATA_DIR || config.internalServiceToken.length < 32)
+)
+  throw new Error('DATA_DIR and INTERNAL_SERVICE_TOKEN (32+ characters) are required');
+const production = process.env.NODE_ENV === 'production';
+const trainingOutbox = config.mail.transport === 'outbox' && config.mail.allowInsecureOutbox;
+if (!['outbox', 'webhook'].includes(config.mail.transport))
+  throw new Error('MAIL_TRANSPORT must be "outbox" (training only) or "webhook"');
+if (production && config.mail.transport === 'outbox' && !trainingOutbox)
+  throw new Error('Outbox is training-only; explicitly set MAIL_ALLOW_INSECURE_OUTBOX=true');
+
+function validateMailUrl(name: string, value: string, httpsRequired: boolean): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL`);
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (httpsRequired && url.protocol !== 'https:')
+  )
+    throw new Error(
+      `${name} must use ${httpsRequired ? 'https' : 'http(s)'} without credentials, query or fragment`,
+    );
+}
+validateMailUrl('PUBLIC_APP_URL', config.mail.publicAppUrl, production && !trainingOutbox);
+if (config.mail.transport === 'webhook') {
+  validateMailUrl('MAIL_WEBHOOK_URL', config.mail.webhookUrl, production);
+  if (production && config.mail.webhookToken.length < 32)
+    throw new Error('MAIL_WEBHOOK_TOKEN must contain at least 32 characters in production');
+}
 for (const [name, value, min, max] of [
   ['JWT_EXPIRES_IN_SECONDS', config.jwt.expiresInSeconds, 60, 3600],
   ['REFRESH_TTL_HOURS', config.refresh.ttlMs / 3_600_000, 1, 2160],

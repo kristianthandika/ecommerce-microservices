@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -16,7 +17,9 @@ interface AuthState {
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  /** New access token from the refresh cookie, e.g. after the email was verified. */
+  refresh: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -39,27 +42,42 @@ function expiryOf(token: string): number | null {
  * - The access token (JWT, 15 minutes) lives ONLY in memory, never in localStorage,
  *   so injected script cannot read it from storage.
  * - The refresh token is an HttpOnly, SameSite=Strict cookie set by auth-service.
- *   JavaScript cannot read it; the browser sends it only to /api/auth.
+ *   JavaScript cannot read it; the browser sends it only to /api/v1/auth.
  * - On page load the session is restored from that cookie, and the access token is
  *   renewed shortly before it expires. Logout revokes the session on the server.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
+  const generation = useRef(0);
+  const signingOut = useRef<Promise<void> | null>(null);
   const token = session?.token ?? null;
 
-  const clear = useCallback(() => setSession(null), []);
+  const clear = useCallback(() => {
+    generation.current += 1;
+    setSession(null);
+  }, []);
+  const refresh = useCallback(async () => {
+    if (signingOut.current) return;
+    const current = generation.current;
+    const restored = await api.refresh();
+    if (current === generation.current) setSession(restored);
+  }, []);
   const renew = useCallback(() => {
-    api.refresh().then(setSession, clear);
-  }, [clear]);
+    const current = generation.current;
+    refresh().catch(() => {
+      if (current === generation.current) clear();
+    });
+  }, [refresh, clear]);
 
   // Restore an existing session (e.g. after a page reload).
   useEffect(() => {
     let active = true;
+    const current = generation.current;
     api
       .refresh()
       .then((restored) => {
-        if (active) setSession(restored);
+        if (active && current === generation.current) setSession(restored);
       })
       .catch(() => {
         /* no session: stay anonymous */
@@ -79,11 +97,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clear();
       return;
     }
-    // A token that is already (nearly) expired is renewed immediately.
-    const timer = setTimeout(
-      renew,
-      Math.min(Math.max(expiresAt - Date.now() - RENEW_BEFORE_MS, 0), 2147483647),
-    );
+    // Near an absolute session deadline a renewal also has a short lifetime.
+    // Renew halfway through that remaining time instead of creating a tight loop.
+    const remaining = expiresAt - Date.now();
+    const delay =
+      remaining > 0 ? Math.max(250, remaining - Math.min(RENEW_BEFORE_MS, remaining / 2)) : 0;
+    const timer = setTimeout(renew, Math.min(delay, 2147483647));
     // A 401 for THIS token (e.g. clock skew) gets one renewal attempt; a 401 from an
     // older token that was already replaced is ignored.
     const expired = (event: Event) => {
@@ -102,20 +121,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token,
       ready,
       async login(email, password) {
-        setSession(await api.login(email, password));
+        if (signingOut.current) await signingOut.current;
+        const current = ++generation.current;
+        const next = await api.login(email, password);
+        if (current === generation.current) setSession(next);
       },
       async register(email, password) {
+        if (signingOut.current) await signingOut.current;
+        const current = ++generation.current;
         await api.register(email, password);
         // Setelah register, langsung login supaya alur mulus.
-        setSession(await api.login(email, password));
+        const next = await api.login(email, password);
+        if (current === generation.current) setSession(next);
       },
       logout() {
-        setSession(null);
-        // Revoke the refresh token server-side; the UI is already signed out.
-        api.logout().catch(() => {});
+        if (signingOut.current) return signingOut.current;
+        // Ignore late renewals. A failed server logout remains visible and can be retried.
+        generation.current += 1;
+        signingOut.current = api
+          .logout(token ?? undefined)
+          .then(clear)
+          .finally(() => {
+            signingOut.current = null;
+          });
+        return signingOut.current;
       },
+      refresh,
     }),
-    [session, token, ready],
+    [session, token, ready, refresh, clear],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

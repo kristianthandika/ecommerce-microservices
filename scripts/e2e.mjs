@@ -89,6 +89,18 @@ async function healthy() {
   throw new Error('Stack did not become healthy');
 }
 let adminToken, userToken, otherToken, product, durableOrder;
+/** Confirms an address with the link from the training mailbox (MAIL_TRANSPORT=outbox). */
+async function verifyEmail(address) {
+  const mailbox = await api(`/auth/admin/outbox?to=${encodeURIComponent(address)}`, {
+    token: adminToken,
+  });
+  assert.equal(mailbox.status, 200);
+  const token = responses.Outbox.parse(mailbox.data).messages[0].link.split('#token=')[1];
+  const verified = await api('/auth/verify-email', { method: 'POST', body: { token } });
+  assert.equal(verified.status, 200);
+  assert.equal(responses.UserEnvelope.parse(verified.data).user.emailVerified, true);
+  return token;
+}
 const racerTokens = [];
 const prefix = randomUUID();
 const password = `Test-${randomUUID()}`;
@@ -104,11 +116,19 @@ try {
     }
   });
   await check('register, login, profile and admin bootstrap', async () => {
-    assert.equal(
-      (await api('/auth/register', { method: 'POST', body: { email, password, role: 'admin' } }))
-        .status,
-      201,
-    );
+    const admin = await api('/auth/login', {
+      method: 'POST',
+      body: { email: process.env.SEED_ADMIN_EMAIL, password: process.env.SEED_ADMIN_PASSWORD },
+    });
+    assert.equal(admin.status, 200);
+    assert.equal(admin.data.user.role, 'admin');
+    adminToken = admin.data.token;
+    const registered = await api('/auth/register', {
+      method: 'POST',
+      body: { email, password, role: 'admin' },
+    });
+    assert.equal(registered.status, 201);
+    assert.equal(registered.data.user.emailVerified, false);
     const login = await api('/auth/login', {
       method: 'POST',
       body: { email: email.toUpperCase(), password },
@@ -117,13 +137,6 @@ try {
     assert.equal(login.data.user.role, 'user');
     userToken = login.data.token;
     assert.equal((await api('/auth/me', { token: userToken })).data.user.email, email);
-    const admin = await api('/auth/login', {
-      method: 'POST',
-      body: { email: process.env.SEED_ADMIN_EMAIL, password: process.env.SEED_ADMIN_PASSWORD },
-    });
-    assert.equal(admin.status, 200);
-    assert.equal(admin.data.user.role, 'admin');
-    adminToken = admin.data.token;
     const secondEmail = `other-${prefix}@test.local`;
     assert.equal(
       (await api('/auth/register', { method: 'POST', body: { email: secondEmail, password } }))
@@ -137,8 +150,55 @@ try {
     for (let i = 0; i < 3; i++) {
       const racer = { email: `racer${i}-${prefix}@test.local`, password };
       assert.equal((await api('/auth/register', { method: 'POST', body: racer })).status, 201);
+      await verifyEmail(racer.email);
       racerTokens.push((await api('/auth/login', { method: 'POST', body: racer })).data.token);
     }
+  });
+  await check('unverified accounts can browse and fill a cart but cannot order', async () => {
+    // Only administrators can read the training mailbox; the account itself cannot.
+    assert.equal((await api('/auth/admin/outbox', { token: userToken })).status, 403);
+    assert.equal((await api('/cart', { token: userToken })).status, 200);
+    const sample = (await api('/products?limit=1')).data.products[0];
+    const attempt = () =>
+      api('/orders', {
+        method: 'POST',
+        token: userToken,
+        key: randomUUID(),
+        body: { items: [{ productId: sample.id, quantity: 1 }] },
+      });
+    const refused = await attempt();
+    assert.equal(refused.status, 403);
+    assert.equal(refused.data.error.code, 'EMAIL_NOT_VERIFIED');
+    const cart = await api('/cart', { token: userToken });
+    const checkout = await api('/cart/checkout', {
+      method: 'POST',
+      token: userToken,
+      key: randomUUID(),
+      headers: { 'if-match': cart.headers.get('etag') },
+      body: {
+        shippingAddress: {
+          recipient: 'Pembeli Uji',
+          phone: '081234567890',
+          street: 'Jalan Uji 123',
+          city: 'Bandung',
+          province: 'Jawa Barat',
+          postalCode: '40123',
+        },
+      },
+    });
+    assert.equal(checkout.status, 403);
+    assert.equal(checkout.data.error.code, 'EMAIL_NOT_VERIFIED');
+    assert.equal((await api(`/products/${sample.id}`)).data.product.stock, sample.stock);
+    const used = await verifyEmail(email);
+    // The link works once, and the token issued before verification still says "unverified".
+    assert.equal(
+      (await api('/auth/verify-email', { method: 'POST', body: { token: used } })).status,
+      400,
+    );
+    assert.equal((await attempt()).status, 403);
+    const login = await api('/auth/login', { method: 'POST', body: { email, password } });
+    assert.equal(login.data.user.emailVerified, true);
+    userToken = login.data.token;
   });
   await check('concurrent duplicate registrations return one 201 and one 409', async () => {
     const body = { email: `race-${prefix}@test.local`, password };
@@ -336,6 +396,7 @@ try {
       headers: { 'if-match': etag },
     });
     assert.equal(ok.status, 200);
+    responses.CartMutationEnvelope.parse(ok.data);
     const stale = await api(`/cart/items/${id}`, {
       method: 'PUT',
       token: otherToken,
@@ -350,6 +411,7 @@ try {
       headers: { 'if-match': ok.headers.get('etag') },
     });
     assert.equal(removed.status, 200);
+    responses.CartMutationEnvelope.parse(removed.data);
     assert.deepEqual(removed.data.cart.items, []);
     assert.equal(
       (await api(`/products/${id}`, { method: 'DELETE', token: adminToken })).status,
@@ -463,6 +525,51 @@ try {
     });
     assert.equal(revoked.status, 401);
   });
+  await check('logout stops the access token at every service within seconds', async () => {
+    /** Seconds until `path` answers 401 SESSION_REVOKED for `token`. */
+    const refusedAfter = async (path, token) => {
+      const start = Date.now();
+      for (;;) {
+        const response = await api(path, { token });
+        if (response.status === 401) {
+          assert.equal(response.data.error.code, 'SESSION_REVOKED');
+          return (Date.now() - start) / 1000;
+        }
+        assert.ok(Date.now() - start < 10_000, `${path} still accepts a logged-out token`);
+        await sleep(500);
+      }
+    };
+    const session = await api('/auth/login', { method: 'POST', body: { email, password } });
+    const adminSession = await api('/auth/login', {
+      method: 'POST',
+      body: { email: process.env.SEED_ADMIN_EMAIL, password: process.env.SEED_ADMIN_PASSWORD },
+    });
+    assert.equal((await api('/cart', { token: session.data.token })).status, 200);
+    for (const login of [session, adminSession])
+      assert.equal(
+        (
+          await api('/auth/logout', {
+            method: 'POST',
+            headers: sessionHeaders(refreshCookie(login).value),
+          })
+        ).status,
+        204,
+      );
+    // auth-service knows at once; order- and product-service learn it from the
+    // revocation list they refresh every few seconds. The token itself has 15 minutes left.
+    assert.equal((await api('/auth/me', { token: session.data.token })).status, 401);
+    const seconds = [
+      await refusedAfter('/cart', session.data.token),
+      await refusedAfter('/products/admin/summary', adminSession.data.token),
+    ];
+    console.log(`     revoked after ${seconds.map((s) => s.toFixed(1)).join(' s / ')} s`);
+    // Other sessions of the same people are untouched.
+    assert.equal((await api('/cart', { token: userToken })).status, 200);
+    assert.equal((await api('/products/admin/summary', { token: adminToken })).status, 200);
+    // The internal list is not reachable from outside, with or without a guessed token.
+    for (const path of ['/auth/internal/revocations', '/auth/INTERNAL/revocations'])
+      assert.equal((await api(path, { headers: { 'x-service-token': 'guess' } })).status, 404);
+  });
   await check('repeated wrong passwords slow down that account only', async () => {
     const target = `throttle-${prefix}@test.local`;
     await api('/auth/register', { method: 'POST', body: { email: target, password } });
@@ -540,6 +647,32 @@ try {
     assert.equal((await fetch(`${apiRoot}/v2/products`)).status, 404);
   });
   if (process.argv.includes('--chaos')) {
+    await check(
+      'protected routes fail closed when the revocation cache expires during auth outage',
+      async () => {
+        assert.equal((await api('/cart', { token: userToken })).status, 200);
+        assert.equal((await api('/products/admin/summary', { token: adminToken })).status, 200);
+        try {
+          compose('stop', 'auth-service');
+          await sleep(6000);
+          for (const [path, token] of [
+            ['/cart', userToken],
+            ['/products/admin/summary', adminToken],
+          ]) {
+            const response = await api(path, { token });
+            assert.equal(response.status, 503, path);
+            assert.equal(response.data.error.code, 'SESSION_CHECK_UNAVAILABLE', path);
+          }
+          assert.equal((await api('/products?limit=1')).status, 200);
+        } finally {
+          compose('start', 'auth-service');
+        }
+        await healthy();
+        await sleep(5500);
+        assert.equal((await api('/cart', { token: userToken })).status, 200);
+        assert.equal((await api('/products/admin/summary', { token: adminToken })).status, 200);
+      },
+    );
     await check('cart catalog reads for all users are not throttled as one client', async () => {
       const cart = (await api('/cart', { token: userToken })).data.cart;
       assert.equal(

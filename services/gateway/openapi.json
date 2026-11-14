@@ -3,7 +3,7 @@
   "info": {
     "title": "E-Commerce Microservices API",
     "version": "1.0.0",
-    "description": "API publik di balik gateway. Base URL `/api/v1`.\n\nJalur tanpa versi (`/api/...`) masih dilayani sebagai alias usang dengan header `Deprecation`, `Sunset` (2027-05-14) dan `Link: rel=\"successor-version\"`.\n\nDokumen ini dibangkitkan oleh `node scripts/openapi.mjs` dari skema zod tiap service; jangan diedit manual."
+    "description": "API publik di balik gateway. Base URL `/api/v1`.\n\nJalur tanpa versi (`/api/...`) masih dilayani sebagai alias usang dengan header `Deprecation`, `Sunset` (2027-05-14) dan `Link: rel=\"successor-version\"`.\n\nDokumen ini dibangkitkan oleh `node scripts/openapi.mjs` dari skema zod tiap service; jangan diedit manual.\nValidasi byte UTF-8, normalisasi, aturan antar-field, dan aturan bisnis tetap dijalankan oleh service; constraint tersebut dijelaskan pada operasi/skema terkait."
   },
   "servers": [
     {
@@ -40,6 +40,7 @@
   "paths": {
     "/auth/register": {
       "post": {
+        "security": [],
         "operationId": "register",
         "tags": [
           "auth"
@@ -57,7 +58,7 @@
         },
         "responses": {
           "201": {
-            "description": "Akun dibuat",
+            "description": "Akun dibuat; tautan verifikasi dikirim ke email (emailVerified: false)",
             "content": {
               "application/json": {
                 "schema": {
@@ -72,14 +73,203 @@
           "409": {
             "$ref": "#/components/responses/E409"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    },
+    "/auth/verify-email": {
+      "post": {
+        "security": [],
+        "operationId": "verifyEmail",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Tukar token dari email verifikasi (sekali pakai, 24 jam)",
+        "description": "Access token yang sudah terbit tetap berisi email_verified: false sampai sesi di-refresh.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Email terverifikasi",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    },
+    "/auth/email-verification": {
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "resendVerification",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Kirim ulang email verifikasi untuk pengguna yang login (maks. 1 per menit)",
+        "responses": {
+          "202": {
+            "description": "Email dikirim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
+          }
+        }
+      }
+    },
+    "/auth/admin/outbox": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "operationId": "trainingOutbox",
+        "tags": [
+          "auth",
+          "admin"
+        ],
+        "summary": "Kotak surat pelatihan (admin): email yang \"dikirim\" sistem",
+        "description": "Hanya ada bila MAIL_TRANSPORT=outbox (pelatihan/lokal). Dengan transport webhook route ini 404.",
+        "parameters": [
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Alamat penerima persis",
+            "schema": {
+              "type": "string",
+              "maxLength": 254
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Outbox"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/auth/login": {
       "post": {
+        "security": [],
         "operationId": "login",
         "tags": [
           "auth"
@@ -120,24 +310,36 @@
           "401": {
             "$ref": "#/components/responses/E401"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/auth/refresh": {
       "post": {
-        "operationId": "refreshSession",
-        "tags": [
-          "auth"
-        ],
-        "summary": "Tukar cookie refresh dengan access token baru (rotasi)",
         "security": [
           {
             "refreshCookie": []
           }
         ],
+        "operationId": "refreshSession",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Tukar cookie refresh dengan access token baru (rotasi)",
         "parameters": [
           {
             "$ref": "#/components/parameters/XRequestedWith"
@@ -163,24 +365,41 @@
           "409": {
             "$ref": "#/components/responses/E409"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/auth/logout": {
       "post": {
+        "security": [
+          {
+            "refreshCookie": []
+          },
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "operationId": "logout",
         "tags": [
           "auth"
         ],
-        "summary": "Cabut sesi refresh di server dan hapus cookie",
-        "security": [
-          {
-            "refreshCookie": []
-          }
-        ],
+        "summary": "Cabut sesi dari cookie atau bearer dan hapus cookie",
+        "description": "Cookie refresh dan bearer JWT bersifat opsional; setiap sesi valid yang disertakan dicabut. Bearer memungkinkan logout saat cookie telah hilang. Kredensial tidak valid diabaikan agar logout tetap idempotent, dan tanpa kredensial tidak ada sesi server yang dicabut. JWT sesi yang dicabut ditolak langsung oleh auth-service; service lain menyegarkan daftar pencabutan sesuai REVOCATION_MAX_AGE_MS (bawaan 5 detik). Header X-Requested-With tetap wajib.",
         "parameters": [
           {
             "$ref": "#/components/parameters/XRequestedWith"
@@ -193,24 +412,36 @@
           "403": {
             "$ref": "#/components/responses/E403"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/auth/me": {
       "get": {
-        "operationId": "currentUser",
-        "tags": [
-          "auth"
-        ],
-        "summary": "Profil pemilik access token",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "currentUser",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Profil pemilik access token",
         "responses": {
           "200": {
             "description": "OK",
@@ -224,12 +455,28 @@
           },
           "401": {
             "$ref": "#/components/responses/E401"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/auth/.well-known/jwks.json": {
       "get": {
+        "security": [],
         "operationId": "jwks",
         "tags": [
           "auth"
@@ -245,12 +492,28 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/auth/health": {
       "get": {
+        "security": [],
         "operationId": "authHealth",
         "tags": [
           "operations"
@@ -266,12 +529,28 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/products": {
       "get": {
+        "security": [],
         "operationId": "listProducts",
         "tags": [
           "products"
@@ -330,23 +609,35 @@
           "400": {
             "$ref": "#/components/responses/E400"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       },
       "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "createProduct",
         "tags": [
           "products",
           "admin"
         ],
         "summary": "Tambah produk (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -376,23 +667,38 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/products/admin/summary": {
       "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "stockSummary",
         "tags": [
           "products",
           "admin"
         ],
         "summary": "Ringkasan stok (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -409,6 +715,21 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -426,6 +747,7 @@
         }
       ],
       "get": {
+        "security": [],
         "operationId": "getProduct",
         "tags": [
           "products"
@@ -444,21 +766,36 @@
           },
           "404": {
             "$ref": "#/components/responses/E404"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       },
       "put": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "updateProduct",
         "tags": [
           "products",
           "admin"
         ],
         "summary": "Ubah produk (admin); expectedRevision mencegah menimpa perubahan lain",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -494,21 +831,36 @@
           },
           "409": {
             "$ref": "#/components/responses/E409"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       },
       "delete": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "deleteProduct",
         "tags": [
           "products",
           "admin"
         ],
         "summary": "Hapus produk (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "responses": {
           "204": {
             "description": "Dihapus"
@@ -521,22 +873,37 @@
           },
           "404": {
             "$ref": "#/components/responses/E404"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/cart": {
       "get": {
-        "operationId": "getCart",
-        "tags": [
-          "cart"
-        ],
-        "summary": "Keranjang dengan harga dan stok terkini",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "getCart",
+        "tags": [
+          "cart"
+        ],
+        "summary": "Keranjang dengan harga dan stok terkini",
         "responses": {
           "200": {
             "description": "OK",
@@ -556,22 +923,34 @@
           "401": {
             "$ref": "#/components/responses/E401"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
           "503": {
             "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       },
       "delete": {
-        "operationId": "clearCart",
-        "tags": [
-          "cart"
-        ],
-        "summary": "Kosongkan keranjang",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "clearCart",
+        "tags": [
+          "cart"
+        ],
+        "summary": "Kosongkan keranjang",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -595,8 +974,23 @@
           "412": {
             "$ref": "#/components/responses/E412"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "428": {
             "$ref": "#/components/responses/E428"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -614,16 +1008,16 @@
         }
       ],
       "put": {
-        "operationId": "setCartItem",
-        "tags": [
-          "cart"
-        ],
-        "summary": "Atur jumlah satu produk di keranjang",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "setCartItem",
+        "tags": [
+          "cart"
+        ],
+        "summary": "Atur jumlah satu produk di keranjang",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -650,7 +1044,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CartEnvelope"
+                  "$ref": "#/components/schemas/CartMutationEnvelope"
                 }
               }
             }
@@ -661,25 +1055,43 @@
           "401": {
             "$ref": "#/components/responses/E401"
           },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
           "412": {
             "$ref": "#/components/responses/E412"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "428": {
             "$ref": "#/components/responses/E428"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       },
       "delete": {
-        "operationId": "removeCartItem",
-        "tags": [
-          "cart"
-        ],
-        "summary": "Hapus satu produk dari keranjang",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "removeCartItem",
+        "tags": [
+          "cart"
+        ],
+        "summary": "Hapus satu produk dari keranjang",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -696,7 +1108,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CartEnvelope"
+                  "$ref": "#/components/schemas/CartMutationEnvelope"
                 }
               }
             }
@@ -707,28 +1119,47 @@
           "401": {
             "$ref": "#/components/responses/E401"
           },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
           "412": {
             "$ref": "#/components/responses/E412"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
           "428": {
             "$ref": "#/components/responses/E428"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/cart/checkout": {
       "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "checkout",
         "tags": [
           "cart",
           "orders"
         ],
         "summary": "Checkout keranjang versi tertentu (idempoten)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
+        "description": "Email harus terverifikasi. Batas per pengguna berlaku di seluruh pesanan aktif, termasuk pembatalan yang stoknya belum berhasil dilepas. Bawaan: 5 pesanan dan 10 unit per produk; dapat dikonfigurasi operator.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -761,33 +1192,48 @@
           "401": {
             "$ref": "#/components/responses/E401"
           },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
           "409": {
             "$ref": "#/components/responses/E409"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
           "503": {
             "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/orders": {
       "get": {
-        "operationId": "listMyOrders",
-        "tags": [
-          "orders"
-        ],
-        "summary": "Riwayat order milik pemanggil, terbaru dulu",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "listMyOrders",
+        "tags": [
+          "orders"
+        ],
+        "summary": "Riwayat order milik pemanggil, terbaru dulu",
         "parameters": [
           {
             "name": "offset",
             "in": "query",
             "required": false,
-            "description": "Halaman bernomor; maksimal 10000. Jangan digabung dengan cursor.",
+            "description": "Halaman bernomor; maksimal 10000. Offset selain 0 tidak boleh digabung dengan cursor.",
             "schema": {
               "default": 0,
               "type": "integer",
@@ -860,20 +1306,36 @@
           },
           "401": {
             "$ref": "#/components/responses/E401"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       },
       "post": {
-        "operationId": "createOrder",
-        "tags": [
-          "orders"
-        ],
-        "summary": "Buat order langsung (idempoten, dibatasi per pelanggan)",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "createOrder",
+        "tags": [
+          "orders"
+        ],
+        "summary": "Buat order langsung (idempoten, dibatasi per pelanggan)",
+        "description": "Email harus terverifikasi. Batas per pengguna berlaku di seluruh pesanan aktif, termasuk pembatalan yang stoknya belum berhasil dilepas. Bawaan: 5 pesanan dan 10 unit per produk; baris produk duplikat dijumlahkan sebelum pemeriksaan.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -906,11 +1368,26 @@
           "401": {
             "$ref": "#/components/responses/E401"
           },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
           "409": {
             "$ref": "#/components/responses/E409"
           },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
           "503": {
             "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -928,16 +1405,16 @@
         }
       ],
       "get": {
-        "operationId": "getMyOrder",
-        "tags": [
-          "orders"
-        ],
-        "summary": "Detail order milik pemanggil (order orang lain: 404)",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "getMyOrder",
+        "tags": [
+          "orders"
+        ],
+        "summary": "Detail order milik pemanggil (order orang lain: 404)",
         "responses": {
           "200": {
             "description": "OK",
@@ -957,6 +1434,21 @@
           },
           "404": {
             "$ref": "#/components/responses/E404"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -974,16 +1466,16 @@
         }
       ],
       "post": {
-        "operationId": "cancelMyOrder",
-        "tags": [
-          "orders"
-        ],
-        "summary": "Batalkan order sendiri selama belum diproses",
         "security": [
           {
             "bearerAuth": []
           }
         ],
+        "operationId": "cancelMyOrder",
+        "tags": [
+          "orders"
+        ],
+        "summary": "Batalkan order sendiri selama belum diproses",
         "requestBody": {
           "required": false,
           "content": {
@@ -1026,29 +1518,44 @@
           },
           "409": {
             "$ref": "#/components/responses/E409"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/orders/admin": {
       "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "listAllOrders",
         "tags": [
           "orders",
           "admin"
         ],
         "summary": "Semua order (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "parameters": [
           {
             "name": "offset",
             "in": "query",
             "required": false,
-            "description": "Halaman bernomor; maksimal 10000. Jangan digabung dengan cursor.",
+            "description": "Halaman bernomor; maksimal 10000. Offset selain 0 tidak boleh digabung dengan cursor.",
             "schema": {
               "default": 0,
               "type": "integer",
@@ -1124,23 +1631,38 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/orders/admin/summary": {
       "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "orderSummary",
         "tags": [
           "orders",
           "admin"
         ],
         "summary": "Ringkasan order (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -1157,6 +1679,21 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -1174,17 +1711,17 @@
         }
       ],
       "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "getAnyOrder",
         "tags": [
           "orders",
           "admin"
         ],
         "summary": "Detail order mana pun (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -1207,6 +1744,21 @@
           },
           "404": {
             "$ref": "#/components/responses/E404"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -1224,17 +1776,17 @@
         }
       ],
       "patch": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "updateFulfillment",
         "tags": [
           "orders",
           "admin"
         ],
         "summary": "Majukan status pemenuhan: NEW → PROCESSING → COMPLETED (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -1270,6 +1822,21 @@
           },
           "409": {
             "$ref": "#/components/responses/E409"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
@@ -1287,17 +1854,17 @@
         }
       ],
       "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "operationId": "cancelAnyOrder",
         "tags": [
           "orders",
           "admin"
         ],
         "summary": "Batalkan order yang belum selesai (admin)",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "required": false,
           "content": {
@@ -1343,12 +1910,28 @@
           },
           "409": {
             "$ref": "#/components/responses/E409"
+          },
+          "413": {
+            "$ref": "#/components/responses/E413"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "502": {
+            "$ref": "#/components/responses/E502"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "504": {
+            "$ref": "#/components/responses/E504"
           }
         }
       }
     },
     "/openapi.json": {
       "get": {
+        "security": [],
         "operationId": "openapi",
         "tags": [
           "operations"
@@ -1360,12 +1943,44 @@
             "content": {
               "application/json": {}
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          }
+        }
+      }
+    },
+    "/": {
+      "servers": [
+        {
+          "url": "/api",
+          "description": "Tidak berversi"
+        }
+      ],
+      "get": {
+        "security": [],
+        "operationId": "gatewayLiveness",
+        "tags": [
+          "operations"
+        ],
+        "summary": "Liveness gateway (dipakai healthcheck container)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
           }
         }
       }
     },
     "/health": {
       "get": {
+        "security": [],
         "operationId": "gatewayHealth",
         "tags": [
           "operations"
@@ -1464,7 +2079,7 @@
         }
       },
       "E401": {
-        "description": "Token tidak ada, kedaluwarsa, atau sesi dicabut",
+        "description": "Token tidak ada, kedaluwarsa, atau sesinya sudah dicabut (SESSION_REVOKED)",
         "content": {
           "application/json": {
             "schema": {
@@ -1474,7 +2089,7 @@
         }
       },
       "E403": {
-        "description": "Role tidak cukup, atau permintaan lintas situs (CSRF_REJECTED)",
+        "description": "Role tidak cukup, email belum diverifikasi (EMAIL_NOT_VERIFIED), atau CSRF_REJECTED",
         "content": {
           "application/json": {
             "schema": {
@@ -1494,7 +2109,7 @@
         }
       },
       "E409": {
-        "description": "Konflik bisnis: stok, idempotensi, status, HOLD_LIMIT_EXCEEDED, REFRESH_RACE",
+        "description": "Konflik bisnis: stok, idempotensi, status, HOLD_LIMIT_EXCEEDED, REFRESH_RACE, EMAIL_ALREADY_VERIFIED",
         "content": {
           "application/json": {
             "schema": {
@@ -1505,6 +2120,16 @@
       },
       "E412": {
         "description": "If-Match tidak cocok dengan versi keranjang (CART_CHANGED)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "E413": {
+        "description": "Body request melebihi batas ukuran",
         "content": {
           "application/json": {
             "schema": {
@@ -1533,8 +2158,28 @@
           }
         }
       },
+      "E502": {
+        "description": "Respons upstream tidak memenuhi kontrak atau operasi upstream ditolak",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
       "E503": {
         "description": "Service di belakang tidak terjangkau; aman dicoba ulang dengan key yang sama",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "E504": {
+        "description": "Waktu tunggu upstream habis",
         "content": {
           "application/json": {
             "schema": {
@@ -1560,6 +2205,19 @@
         "required": [
           "email",
           "password"
+        ],
+        "description": "Email di-trim, diubah ke huruf kecil, lalu diperiksa format emailnya. Password minimal 8 unit UTF-16 dan maksimal 72 byte UTF-8. Batas byte dan normalisasi tidak terwakili sepenuhnya oleh minLength/format JSON Schema."
+      },
+      "VerifyEmailInput": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{20,100}$"
+          }
+        },
+        "required": [
+          "token"
         ]
       },
       "ProductInput": {
@@ -1609,7 +2267,8 @@
             "type": "integer",
             "minimum": 0
           }
-        }
+        },
+        "description": "Minimal satu field name, price, atau stock wajib diisi; expectedRevision saja tidak cukup. Nama di-trim sebelum validasi. expectedRevision opsional untuk kompatibilitas klien lama."
       },
       "OrderInput": {
         "type": "object",
@@ -1786,12 +2445,17 @@
               "user",
               "admin"
             ]
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "description": "false: akun belum boleh membuat pesanan (klaim JWT email_verified)"
           }
         },
         "required": [
           "id",
           "email",
-          "role"
+          "role",
+          "emailVerified"
         ],
         "additionalProperties": false
       },
@@ -1968,6 +2632,50 @@
           "total",
           "quantity",
           "canCheckout",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "CartSnapshot": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "productId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                }
+              },
+              "required": [
+                "productId",
+                "quantity"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "version",
+          "items",
           "updatedAt"
         ],
         "additionalProperties": false
@@ -2297,6 +3005,84 @@
         ],
         "additionalProperties": false
       },
+      "Outbox": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "link": {
+                  "description": "Tautan aksi di dalam email",
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                }
+              },
+              "required": [
+                "id",
+                "to",
+                "subject",
+                "text",
+                "createdAt"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "Accepted": {
+        "type": "object",
+        "properties": {
+          "sent": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "sent"
+        ],
+        "additionalProperties": false
+      },
+      "Liveness": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "const": "ok"
+          }
+        },
+        "required": [
+          "service",
+          "status"
+        ],
+        "additionalProperties": false
+      },
       "ProductEnvelope": {
         "type": "object",
         "properties": {
@@ -2314,6 +3100,18 @@
         "properties": {
           "cart": {
             "$ref": "#/components/schemas/Cart"
+          }
+        },
+        "required": [
+          "cart"
+        ],
+        "additionalProperties": false
+      },
+      "CartMutationEnvelope": {
+        "type": "object",
+        "properties": {
+          "cart": {
+            "$ref": "#/components/schemas/CartSnapshot"
           }
         },
         "required": [

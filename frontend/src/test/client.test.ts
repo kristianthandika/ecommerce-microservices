@@ -34,4 +34,26 @@ describe('API client', () => {
     expect((init.headers as Record<string, string>)['x-requested-with']).toBe('fetch');
     expect(init.credentials).toBe('same-origin');
   });
+
+  it('waits for a rotated cookie before sending logout', async () => {
+    let complete!: (response: Response) => void;
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+    const renewal = api.refresh();
+    const logout = api.logout('active-access-token');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    complete(json({ token: 'renewed', user: { id: '1' } }));
+    await Promise.all([renewal, logout]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][0]).toBe('/api/v1/auth/logout');
+    expect(fetch.mock.calls[1][1].headers.authorization).toBe('Bearer active-access-token');
+  });
 });

@@ -1,0 +1,10 @@
+extends:
+  - recommended
+rules:
+  # This private training project has no published license; do not invent one.
+  info-license: off
+  # /health and gateway liveness intentionally accept no inputs and bypass quotas.
+  operation-4xx-response: off
+  # /orders/{id}/cancel is POST; /orders/admin/{id} is GET. The router and UUID
+  # validation disambiguate them. Coverage tests check actual methods and paths.
+  no-ambiguous-paths: off

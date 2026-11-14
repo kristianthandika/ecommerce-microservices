@@ -4,6 +4,8 @@ import { createApp } from './app.ts';
 import { getKeyMaterial } from './keys.ts';
 import { seedAdmin } from './users.ts';
 import { purgeExpiredSessions } from './sessions.ts';
+import { purgeExpiredVerifications } from './verification.ts';
+import { purgeExpiredMail } from './mailer.ts';
 
 const logger = createLogger(config.serviceName);
 
@@ -18,10 +20,23 @@ const server = app.listen(config.port, () => {
   logger.info({ port: config.port }, `${config.serviceName} listening`);
 });
 
-// Retensi: refresh token, keluarga sesi, dan penghitung gagal login yang kedaluwarsa.
+if (config.emailVerification.required && config.mail.transport === 'outbox')
+  logger.warn(
+    'MAIL_TRANSPORT=outbox: email verifikasi terbaca administrator lewat /admin/outbox — HANYA untuk pelatihan',
+  );
+
+// Retensi: refresh token, keluarga sesi, daftar pencabutan, penghitung gagal login,
+// token verifikasi email, dan outbox yang kedaluwarsa.
 const retention = setInterval(() => {
   try {
-    logger.debug({ result: purgeExpiredSessions() }, 'retensi sesi');
+    logger.debug(
+      {
+        sessions: purgeExpiredSessions(),
+        verifications: purgeExpiredVerifications(),
+        mail: purgeExpiredMail(),
+      },
+      'retensi sesi',
+    );
   } catch (err) {
     logger.error({ err }, 'retensi sesi gagal');
   }

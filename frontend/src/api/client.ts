@@ -7,6 +7,16 @@ export interface User {
   id: string;
   email: string;
   role: string;
+  /** false: the account may browse and fill a cart but not create orders yet. */
+  emailVerified?: boolean;
+}
+export interface OutboxMessage {
+  id: string;
+  to: string;
+  subject: string;
+  text: string;
+  link?: string;
+  createdAt: string;
 }
 
 export interface Product {
@@ -215,8 +225,22 @@ export const api = {
     });
     return refreshing;
   },
-  logout: () => request<void>('/auth/logout', { method: 'POST', headers: SESSION_HEADER }),
+  async logout(token?: string): Promise<void> {
+    // A renewal may still replace the cookie. Revoke the resulting cookie, not its predecessor.
+    if (refreshing) await refreshing.catch(() => {});
+    await request<void>('/auth/logout', { method: 'POST', headers: SESSION_HEADER, token });
+  },
   me: (token: string) => request<{ user: User }>('/auth/me', { token }),
+  verifyEmail: (verificationToken: string) =>
+    request<{ user: User }>('/auth/verify-email', {
+      method: 'POST',
+      body: { token: verificationToken },
+    }),
+  resendVerification: (token: string) =>
+    request<{ sent: true }>('/auth/email-verification', { method: 'POST', token }),
+  /** Training mailbox; 404 when mail is really sent (MAIL_TRANSPORT=webhook). */
+  outbox: (token: string, limit = 20) =>
+    request<{ messages: OutboxMessage[] }>(`/auth/admin/outbox?limit=${limit}`, { token }),
   products: (query = '') =>
     request<{ products: Product[]; total?: number }>(`/products${query ? `?${query}` : ''}`),
   createProduct: (body: Omit<Product, 'id'>, token: string) =>

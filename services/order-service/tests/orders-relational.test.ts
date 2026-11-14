@@ -21,7 +21,7 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', {
 });
 const jwk = { ...(createPublicKey(publicKey).export({ format: 'jwk' }) as JsonWebKey), kid: 'k1' };
 const sign = (sub: string, role = 'user') =>
-  jwt.sign({ role }, privateKey, {
+  jwt.sign({ role, sid: 'test-session', email_verified: true }, privateKey, {
     algorithm: 'RS256',
     keyid: 'k1',
     subject: sub,
@@ -33,6 +33,7 @@ const buyer = sign('buyer');
 const admin = sign('admin-1', 'admin');
 
 let product: typeof import('../../product-service/src/products.ts');
+let releaseUnavailable = false;
 const servers: Server[] = [];
 let base = '';
 
@@ -55,9 +56,11 @@ beforeAll(async () => {
   process.env.ORDER_MAX_UNITS_PER_PRODUCT = '10';
   process.env.INTERNAL_SERVICE_TOKEN = 'test-service-token-with-at-least-32-characters';
   process.env.AUTH_SERVICE_URL = await listen(
-    createServer((_req, res) => {
+    createServer((req, res) => {
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ keys: [jwk] }));
+      res.end(
+        JSON.stringify(req.url === '/internal/revocations' ? { revoked: [] } : { keys: [jwk] }),
+      );
     }),
   );
   product = await import('../../product-service/src/products.ts');
@@ -69,6 +72,10 @@ beforeAll(async () => {
           return res.end(JSON.stringify({ products: product.listProducts() }));
         const [, , , id, action] = req.url!.split('/');
         if (action === 'release') {
+          if (releaseUnavailable) {
+            res.statusCode = 503;
+            return res.end('{}');
+          }
           return res.end(JSON.stringify({ reservation: product.releaseReservation(id) }));
         }
         const { items } = await body(req);
@@ -271,6 +278,55 @@ describe('relational order storage', () => {
 });
 
 describe('per-customer hold limit (OWASP API6)', () => {
+  it('keeps cancellation requests inside the limit until stock is actually released', async () => {
+    const holder = sign('cancel-pending-holder');
+    const p = product.createProduct({ name: 'Release pending', price: 1000, stock: 100 });
+    const first = await order(p.id, 10, holder);
+    expect(first.status).toBe(201);
+    try {
+      releaseUnavailable = true;
+      const cancelled = await call(`/orders/${first.data.order.id}/cancel`, {
+        token: holder,
+        method: 'POST',
+      });
+      expect(cancelled.status).toBe(202);
+      expect(cancelled.data.order.status).toBe('CANCELLATION_REQUESTED');
+      const refused = await order(p.id, 1, holder);
+      expect(refused.status).toBe(409);
+      expect(refused.data.error).toMatchObject({
+        code: 'HOLD_LIMIT_EXCEEDED',
+        details: { held: 10, requested: 1 },
+      });
+      expect(product.getProduct(p.id).stock).toBe(90);
+    } finally {
+      releaseUnavailable = false;
+    }
+    const released = await call(`/orders/${first.data.order.id}/cancel`, {
+      token: holder,
+      method: 'POST',
+    });
+    expect(released.status).toBe(200);
+    expect(released.data.order.status).toBe('CANCELLED');
+    expect(product.getProduct(p.id).stock).toBe(100);
+    expect((await order(p.id, 10, holder)).status).toBe(201);
+  });
+
+  it('aggregates duplicate lines before applying the per-product limit', async () => {
+    const p = product.createProduct({ name: 'Duplicate lines', price: 1000, stock: 100 });
+    const response = await call('/orders', {
+      token: sign('duplicate-lines-holder'),
+      method: 'POST',
+      json: { items: [1, 2].map(() => ({ productId: p.id, quantity: 6 })) },
+      headers: { 'idempotency-key': randomUUID() },
+    });
+    expect(response.status).toBe(409);
+    expect(response.data.error).toMatchObject({
+      code: 'HOLD_LIMIT_EXCEEDED',
+      details: { held: 0, requested: 12 },
+    });
+    expect(product.getProduct(p.id).stock).toBe(100);
+  });
+
   it('caps the units of one product a customer holds in open orders', async () => {
     const holder = sign('holder');
     const p = product.createProduct({ name: 'Limited drop', price: 1000, stock: 100 });

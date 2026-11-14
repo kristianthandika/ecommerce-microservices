@@ -6,11 +6,17 @@ import { AppError } from './middleware/errors.ts';
 /**
  * Refresh-token sessions (rotation + reuse detection) and per-account login backoff.
  *
+ * Refresh tokens are opaque, stored only as SHA-256 hashes, and rotated on every use.
+ * All tokens issued from one login form a "family": presenting an already-rotated
+ * token outside a short grace window means it was copied, so the whole family is
+ * revoked.
+ *
  * Access tokens (JWT, 15 min) are verified by every service without calling back
- * here, so they cannot be revoked; their short lifetime bounds the damage. Refresh
- * tokens are opaque, stored only as SHA-256 hashes, and rotated on every use. All
- * tokens issued from one login form a "family": presenting an already-rotated token
- * outside a short grace window means it was copied, so the whole family is revoked.
+ * here. Each carries its family ID as `sid`. Revoking a family also lists that ID in
+ * `revoked_sessions` until its last access token has expired; the other services
+ * fetch this short list every few seconds (GET /internal/revocations) and refuse
+ * tokens whose `sid` is on it. Logout therefore takes effect within seconds instead
+ * of at token expiry, without a call to auth-service on every request.
  */
 interface RefreshRecord {
   userId: string;
@@ -34,6 +40,16 @@ interface LoginFailures {
 const tokens = database.store<RefreshRecord>('refresh_tokens');
 const families = database.store<RefreshFamily>('refresh_families');
 const failures = database.store<LoginFailures>('login_failures');
+export interface RevokedSession {
+  sid: string;
+  /** Epoch ms after which no access token of this session can still be valid. */
+  until: number;
+}
+const revoked = database.store<RevokedSession>('revoked_sessions');
+/** Verifiers tolerate small clock differences; keep entries a little longer. */
+const CLOCK_SKEW_MS = 60_000;
+// Cover tokens issued before an operator reduced JWT_EXPIRES_IN_SECONDS.
+const MAX_ACCESS_TOKEN_MS = 3_600_000;
 
 const hash = (token: string) => createHash('sha256').update(token).digest('base64url');
 const invalid = () =>
@@ -53,18 +69,36 @@ export function startSession(userId: string, now = Date.now()) {
     const familyId = randomUUID();
     const expiresAt = now + config.refresh.familyMaxMs;
     families.insert(familyId, { userId, createdAt: now, expiresAt }, expiresAt);
-    return mint(userId, familyId, now);
+    return { familyId, ...mint(userId, familyId, now) };
   });
 }
 
-function revokeFamily(familyId: string, reason: RefreshFamily['revokedReason'], now: number) {
+function revokeFamily(
+  familyId: string,
+  reason: RefreshFamily['revokedReason'],
+  now: number,
+  signedAccessToken = false,
+) {
   const family = families.get(familyId);
-  if (family && !family.revokedAt)
-    families.set(familyId, { ...family, revokedAt: now, revokedReason: reason });
+  if ((!family && !signedAccessToken) || family?.revokedAt) return;
+  if (family) families.set(familyId, { ...family, revokedAt: now, revokedReason: reason });
+  const until = now + MAX_ACCESS_TOKEN_MS + CLOCK_SKEW_MS;
+  revoked.set(familyId, { sid: familyId, until }, until);
+}
+
+/** True while access tokens of this session must be refused. */
+export function isSessionRevoked(sid: string, now = Date.now()): boolean {
+  const entry = revoked.get(sid);
+  return entry !== undefined && entry.until > now;
+}
+
+/** The revocation list other services poll. Short by construction: entries live at most 61 minutes, covering supported token TTLs. */
+export function listRevokedSessions(now = Date.now()): RevokedSession[] {
+  return revoked.values().filter((entry) => entry.until > now);
 }
 
 export type RotationResult =
-  | { kind: 'rotated'; userId: string; token: string; expiresAt: number }
+  | { kind: 'rotated'; userId: string; familyId: string; token: string; expiresAt: number }
   | { kind: 'reused'; userId: string };
 
 /**
@@ -91,7 +125,12 @@ export function rotateSession(token: string, now = Date.now()): RotationResult {
     }
     if (now >= record.expiresAt) throw invalid();
     tokens.set(key, { ...record, rotatedAt: now });
-    return { kind: 'rotated', userId: record.userId, ...mint(record.userId, record.familyId, now) };
+    return {
+      kind: 'rotated',
+      userId: record.userId,
+      familyId: record.familyId,
+      ...mint(record.userId, record.familyId, now),
+    };
   });
 }
 
@@ -101,6 +140,11 @@ export function endSession(token: string, now = Date.now()): void {
     const record = tokens.get(hash(token));
     if (record) revokeFamily(record.familyId, 'logout', now);
   });
+}
+
+/** Only call after verifying a signed, unexpired JWT; the cookie may have disappeared. */
+export function endAccessSession(sid: string, now = Date.now()): void {
+  database.transaction(() => revokeFamily(sid, 'logout', now, true));
 }
 
 /** Called when a refresh points at a user that no longer exists. */
@@ -155,5 +199,6 @@ export function purgeExpiredSessions(now = Date.now(), batch = 500) {
     tokens: tokens.sweep(now, batch, () => 'delete'),
     families: families.sweep(now, batch, () => 'delete'),
     failures: failures.sweep(now, batch, () => 'delete'),
+    revoked: revoked.sweep(now, batch, () => 'delete'),
   }));
 }

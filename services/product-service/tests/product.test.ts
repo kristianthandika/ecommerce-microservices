@@ -19,7 +19,7 @@ const kid = createHash('sha256')
 const jwk = { ...jwkBase, kid, use: 'sig', alg: 'RS256' };
 
 const sign = (role: string): string =>
-  jwt.sign({ role }, privateKey, {
+  jwt.sign({ role, sid: 'test-session', email_verified: true }, privateKey, {
     algorithm: 'RS256',
     keyid: kid,
     subject: `user-${role}`,
@@ -42,6 +42,9 @@ beforeAll(async () => {
       jwksHits += 1;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ keys: [jwk] }));
+    } else if (req.url === '/internal/revocations') {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ revoked: [] }));
     } else {
       res.statusCode = 404;
       res.end();
@@ -134,7 +137,7 @@ describe('product-service distributed auth & RBAC', () => {
     expect(legit.status).toBe(200);
   });
 
-  it('setelah auth-service MATI, verifikasi token berikutnya TETAP berhasil (cache jwks-rsa)', async () => {
+  it('auth outage uses cached keys only while the revocation snapshot is still fresh', async () => {
     await new Promise<void>((r) => fakeServer.close(() => r()));
     const hitsBefore = jwksHits;
 

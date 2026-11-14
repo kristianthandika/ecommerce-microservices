@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { validate } from './middleware/validate.ts';
 import { requireAuth } from './middleware/require-auth.ts';
 import { requireAdmin } from './middleware/require-role.ts';
+import { requireVerifiedEmail } from './middleware/require-verified-email.ts';
 import { AppError } from './middleware/errors.ts';
 import { database } from './database.ts';
 import {
@@ -98,23 +99,35 @@ export function buildRouter(): Router {
     sendCartVersion(res, getCart(userId).version);
     res.status(204).end();
   });
-  router.post('/cart/checkout', requireAuth, validate(checkoutSchema), async (req, res) => {
-    const input = req.validated as z.infer<typeof checkoutSchema>;
-    await respondOrder(req, res, (ctx) =>
-      checkoutCart(String(req.user?.sub), input.version, input.shippingAddress, ctx),
-    );
-  });
-  router.post('/orders', requireAuth, validate(orderSchema), async (req, res) => {
-    await respondOrder(req, res, (ctx) =>
-      createOrder(
-        {
-          userId: String(req.user?.sub),
-          items: (req.validated as z.infer<typeof orderSchema>).items,
-        },
-        ctx,
-      ),
-    );
-  });
+  router.post(
+    '/cart/checkout',
+    requireAuth,
+    requireVerifiedEmail,
+    validate(checkoutSchema),
+    async (req, res) => {
+      const input = req.validated as z.infer<typeof checkoutSchema>;
+      await respondOrder(req, res, (ctx) =>
+        checkoutCart(String(req.user?.sub), input.version, input.shippingAddress, ctx),
+      );
+    },
+  );
+  router.post(
+    '/orders',
+    requireAuth,
+    requireVerifiedEmail,
+    validate(orderSchema),
+    async (req, res) => {
+      await respondOrder(req, res, (ctx) =>
+        createOrder(
+          {
+            userId: String(req.user?.sub),
+            items: (req.validated as z.infer<typeof orderSchema>).items,
+          },
+          ctx,
+        ),
+      );
+    },
+  );
   router.get('/orders/admin/summary', requireAuth, requireAdmin, (_req, res) =>
     res.json(adminSummary()),
   );
