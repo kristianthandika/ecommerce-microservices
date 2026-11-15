@@ -10,6 +10,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import httpProxy from '@fastify/http-proxy';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { createLogger, CORRELATION_ID_HEADER } from '@ecommerce/logger';
 import { config } from './config.ts';
@@ -213,13 +214,46 @@ export async function buildApp({
       connect: { rejectUnauthorized: true },
     },
   };
-  // TODO m12.6 — layani semua prefix di bawah `/v1` (plus `/v1/openapi.json` dari
-  // ../openapi.json dan `/v1/health`), lalu jadikan jalur tanpa versi alias usang
-  // dengan header Deprecation (RFC 9745), Sunset (RFC 8594) dan
-  // Link: <${config.api.publicPrefix}/v1...>; rel="successor-version".
-  // Bentuk target Link lewat `new URL(request.url, 'http://gateway.invalid')`, jangan
-  // menempelkan request.url mentah (karakter > atau " bisa menyisipkan parameter).
-  for (const route of routes) await app.register(httpProxy, { ...route, ...proxyOptions });
+  const openapi = readFileSync(new URL('../openapi.json', import.meta.url), 'utf8');
+
+  // Versi saat ini: /v1/... (publik: /api/v1/...).
+  await app.register(
+    async (v1) => {
+      // Same aggregated health as /health, so clients need a single base URL.
+      v1.get('/health', { config: { rateLimit: false } }, aggregatedHealth);
+      v1.get('/openapi.json', async (_request, reply) =>
+        reply.type('application/json').header('cache-control', 'public, max-age=300').send(openapi),
+      );
+      for (const route of routes) await v1.register(httpProxy, { ...route, ...proxyOptions });
+    },
+    { prefix: '/v1' },
+  );
+
+  // Jalur lama tanpa versi: perilaku sama, ditandai usang (RFC 9745 Deprecation,
+  // RFC 8594 Sunset) dan menunjuk penggantinya, supaya klien punya waktu pindah.
+  const { legacy, publicPrefix } = config.api;
+  if (legacy.enabled) {
+    const deprecation = `@${Math.floor(Date.parse(legacy.deprecatedAt) / 1000)}`;
+    const sunset = new Date(legacy.sunset).toUTCString();
+    await app.register(async (unversioned) => {
+      unversioned.addHook('onRequest', async (request, reply) => {
+        // Target dibentuk lewat URL parser: karakter seperti > atau " dari request
+        // di-encode, sehingga tidak bisa menyisipkan parameter ke header Link.
+        const target = new URL(request.url, 'http://gateway.invalid');
+        reply
+          .header('deprecation', deprecation)
+          .header('sunset', sunset)
+          .header(
+            'link',
+            `<${publicPrefix}/v1${target.pathname}${target.search}>; rel="successor-version"`,
+          );
+        // Siapa yang masih memakai jalur lama menentukan kapan aman dimatikan.
+        request.log.info({ legacyPath: request.routeOptions.url }, 'jalur API tanpa versi');
+      });
+      for (const route of routes)
+        await unversioned.register(httpProxy, { ...route, ...proxyOptions });
+    });
+  }
 
   return app;
 }
