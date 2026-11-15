@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Header } from '../components/Header';
 import { Footer } from '../components/Footer';
+import { HealthWidget } from '../components/HealthWidget';
 import { api, ApiError, type Product } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
-const rupiah = (n: number) =>
-  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n);
+const rupiah = (n: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n);
 
-/**
- * Dashboard m4.1 — katalog + buat order lewat gateway. Live health widget
- * ditambahkan di m4.2.
- */
 export function DashboardPage() {
   const { token } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
@@ -38,43 +34,52 @@ export function DashboardPage() {
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8">
-        <h1 className="text-2xl font-semibold text-primary mb-1">Katalog Produk</h1>
-        <p className="text-sm text-muted mb-6">
-          Data melewati gateway → product-service. Order melewati order-service (resilient).
-        </p>
-
-        {notice && (
-          <p
-            role="status"
-            className={`mb-4 text-sm rounded-lg px-3 py-2 ${
-              notice.kind === 'ok' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
-            }`}
-          >
-            {notice.text}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 grid gap-8 lg:grid-cols-[1fr_320px]">
+        <section>
+          <h1 className="text-2xl font-semibold text-primary mb-1">Katalog Produk</h1>
+          <p className="text-sm text-muted mb-6">
+            Data melewati gateway → product-service. Order melewati order-service (resilient).
           </p>
-        )}
 
-        {loading ? (
-          <p className="text-muted">Memuat…</p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {products.map((p) => (
-              <article key={p.id} className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm flex flex-col">
-                <h3 className="font-semibold text-ink">{p.name}</h3>
-                <p className="text-secondary font-medium mt-1">{rupiah(p.price)}</p>
-                <p className="text-xs text-muted mt-1">Stok: {p.stock}</p>
-                <button
-                  type="button"
-                  onClick={() => order(p)}
-                  className="mt-4 rounded-lg bg-accent hover:bg-secondary text-white text-sm font-medium py-2 transition-colors"
+          {notice && (
+            <p
+              role="status"
+              className={`mb-4 text-sm rounded-lg px-3 py-2 ${
+                notice.kind === 'ok' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
+              }`}
+            >
+              {notice.text}
+            </p>
+          )}
+
+          {loading ? (
+            <p className="text-muted">Memuat…</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {products.map((p) => (
+                <article
+                  key={p.id}
+                  className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm flex flex-col"
                 >
-                  Buat Order (1)
-                </button>
-              </article>
-            ))}
-          </div>
-        )}
+                  <h3 className="font-semibold text-ink">{p.name}</h3>
+                  <p className="text-secondary font-medium mt-1">{rupiah(p.price)}</p>
+                  <p className="text-xs text-muted mt-1">Stok: {p.stock}</p>
+                  <button
+                    type="button"
+                    onClick={() => order(p)}
+                    className="mt-4 rounded-lg bg-accent hover:bg-secondary text-white text-sm font-medium py-2 transition-colors"
+                  >
+                    Buat Order (1)
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <aside>
+          <HealthWidget />
+        </aside>
       </main>
       <Footer />
     </div>
