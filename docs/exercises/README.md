@@ -62,7 +62,7 @@ bash scripts/dev/worktrees.sh --clean   # hapus folder-folder tadi
 
 ## Daftar lab
 
-Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (2 lab lagi).
+Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (1 lab lagi).
 
 | Modul | Lab                                                                                 | Branch awal                             |
 | ----- | ----------------------------------------------------------------------------------- | --------------------------------------- |
@@ -93,5 +93,5 @@ Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch st
 | 12    | [m12.8 — Pendaftaran tanpa enumerasi akun (API2)](m12.8-register-no-enumeration.md) | `starter/m12.8-register-no-enumeration` |
 | 12    | [m12.9 — Verifikasi email dengan password](m12.9-verify-with-password.md)           | `starter/m12.9-verify-with-password`    |
 | 12    | [m12.10 — Lupa password](m12.10-password-reset.md)                                  | `starter/m12.10-password-reset`         |
-| 12    | m12.11 — Device cookie anti-lockout                                                 | `starter/m12.11-device-cookie`          |
+| 12    | [m12.11 — Device cookie anti-lockout](m12.11-device-cookie.md)                      | `starter/m12.11-device-cookie`          |
 | 12    | m12.12 — Hardening gateway                                                          | `starter/m12.12-gateway-hardening`      |

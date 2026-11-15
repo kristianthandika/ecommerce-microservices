@@ -25,43 +25,41 @@ interface Device {
 const devices = database.store<Device>('devices');
 const hash = (token: string) => createHash('sha256').update(token).digest('base64url');
 
-/** A new device cookie for `userId`; the one the browser presented, if any, is retired. */
+/**
+ * TODO m12.11 — terbitkan cookie baru untuk `userId` dan SIMPAN hash-nya (bukan
+ * nilainya) bersama `{ userId, failures: 0, expiresAt }`, dalam transaksi. Cookie lama
+ * yang dikirim browser (`presented`) dan milik akun yang sama dihapus (rotasi).
+ * Versi starter hanya membuat token acak yang tidak pernah diingat.
+ */
 export function issueDevice(
-  userId: string,
-  presented?: string,
+  _userId: string,
+  _presented?: string,
   now = Date.now(),
 ): { token: string; expiresAt: number } {
-  const token = randomBytes(32).toString('base64url');
-  const expiresAt = now + config.device.ttlMs;
-  database.transaction(() => {
-    if (presented && devices.get(hash(presented))?.userId === userId)
-      devices.delete(hash(presented));
-    devices.insert(hash(token), { userId, failures: 0, expiresAt }, expiresAt);
-  });
-  return { token, expiresAt };
+  return { token: randomBytes(32).toString('base64url'), expiresAt: now + config.device.ttlMs };
 }
 
-/** True when the cookie was issued to this very account and has not been used up. */
+/**
+ * TODO m12.11 — true hanya bila hash cookie dikenal, MILIK akun ini (cookie akun lain
+ * tidak membuka kunci), dan belum kedaluwarsa. Versi starter tidak pernah percaya.
+ */
 export function isTrustedDevice(
-  token: string | undefined,
-  userId: string,
-  now = Date.now(),
+  _token: string | undefined,
+  _userId: string,
+  _now = Date.now(),
 ): boolean {
-  if (!token) return false;
-  const device = devices.get(hash(token));
-  return device !== undefined && device.userId === userId && device.expiresAt > now;
+  return false;
 }
 
-/** Counts a wrong password against the cookie and discards it at the limit. */
-export function recordDeviceFailure(token: string): void {
-  database.transaction(() => {
-    const key = hash(token);
-    const device = devices.get(key);
-    if (!device) return;
-    if (device.failures + 1 >= config.device.maxFailures) devices.delete(key);
-    else devices.set(key, { ...device, failures: device.failures + 1 });
-  });
-}
+/**
+ * TODO m12.11 — hitung satu password salah pada cookie ini; pada
+ * `config.device.maxFailures` cookie dihapus, supaya cookie curian hanya memberi
+ * beberapa tebakan.
+ */
+export function recordDeviceFailure(_token: string): void {}
+
+// Dipakai implementasi di atas; dibiarkan agar starter tetap lolos typecheck.
+void hash;
 
 /** Forgets every device of an account, e.g. after its password was reset. */
 export function forgetDevices(userId: string): void {
