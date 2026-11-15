@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.local
+.DS_Store
+
+# RSA keypair generated at runtime by auth-service (never commit secrets)
+services/auth-service/keys/
+!services/auth-service/keys/.gitkeep
+
+# load test output
+services/gateway/loadtest-*.txt
+services/gateway/loadtest-*.json
+
+# TS build info
+*.tsbuildinfo
