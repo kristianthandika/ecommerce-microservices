@@ -3,18 +3,25 @@ import helmet from '@fastify/helmet';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import httpProxy from '@fastify/http-proxy';
-import { createLogger } from '@ecommerce/logger';
+import { randomUUID } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
+import { createLogger, CORRELATION_ID_HEADER } from '@ecommerce/logger';
 import { config } from './config.ts';
+import { attachCorrelation } from './correlation.ts';
 
 /**
- * Gateway m3.1 — reverse proxy + rate-limit + helmet + CORS terpusat, dan
- * penerusan IP klien asli lewat X-Forwarded-For / X-Real-IP (anti-spoof).
- * Correlation ID (m3.2), health agregat & tracing (m3.3) ditambahkan kemudian.
+ * Gateway m3.2 — menambah correlation ID: `genReqId` membaca/menghasilkan
+ * `x-correlation-id`, dan hook `attachCorrelation` memantulkannya ke response
+ * serta meneruskannya (bersama X-Forwarded-For anti-spoof) ke service di
+ * baliknya. Health agregat & tracing ditambahkan di m3.3.
  */
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     loggerInstance: createLogger('gateway') as unknown as FastifyBaseLogger,
-    // Gateway = trust boundary: JANGAN percaya XFF dari klien (bisa dispoof).
+    genReqId(req: IncomingMessage) {
+      const h = req.headers[CORRELATION_ID_HEADER];
+      return (Array.isArray(h) ? h[0] : h) || randomUUID();
+    },
     trustProxy: false,
   });
 
@@ -25,14 +32,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     timeWindow: config.rateLimit.timeWindow,
   });
 
-  // Tulis X-Forwarded-For / X-Real-IP = IP klien yang benar-benar diamati
-  // gateway → service di baliknya (express-rate-limit) melihat IP klien asli,
-  // bukan IP gateway. OVERWRITE (bukan teruskan) demi anti-spoof.
-  app.addHook('onRequest', (request, _reply, done) => {
-    request.raw.headers['x-forwarded-for'] = request.ip;
-    request.raw.headers['x-real-ip'] = request.ip;
-    done();
-  });
+  app.addHook('onRequest', attachCorrelation);
 
   app.get('/', async () => ({ service: 'gateway', status: 'ok' }));
 

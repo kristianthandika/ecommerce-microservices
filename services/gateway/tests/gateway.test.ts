@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * Test gateway m3.1 pakai `fastify.inject()` (bawaan Fastify): request diproses
+ * Test gateway m3.2 pakai `fastify.inject()` (bawaan Fastify): request diproses
  * tanpa membuka port. Upstream (auth/product/order) diwakili http double yang
  * benar-benar listen dan MEMANTULKAN path + header yang ia terima, supaya kita
  * bisa melihat apa yang sebenarnya diteruskan proxy.
@@ -42,7 +42,7 @@ afterAll(async () => {
   for (const server of doubles) await new Promise((resolve) => server.close(resolve));
 });
 
-describe('gateway m3.1 — reverse proxy', () => {
+describe('gateway m3.2 — reverse proxy & correlation ID', () => {
   it('meneruskan /products ke product-service dengan path yang sama', async () => {
     const res = await app.inject({ method: 'GET', url: '/products?q=mug' });
     expect(res.statusCode).toBe(200);
@@ -80,4 +80,23 @@ describe('gateway m3.1 — reverse proxy', () => {
     const res = await app.inject({ method: 'GET', url: '/' });
     expect(res.headers['x-ratelimit-limit']).toBeDefined();
   });
+
+  it('meneruskan correlation ID YANG SAMA ke service & memantulkannya ke response', async () => {
+    const cid = 'test-correlation-123';
+    const res = await app.inject({
+      method: 'GET',
+      url: '/products',
+      headers: { 'x-correlation-id': cid },
+    });
+    expect(res.headers['x-correlation-id']).toBe(cid);
+    expect(res.json().received['x-correlation-id']).toBe(cid);
+  });
+
+  it('membuat correlation ID baru kalau klien tidak mengirimnya', async () => {
+    const res = await app.inject({ method: 'GET', url: '/products' });
+    const cid = res.headers['x-correlation-id'];
+    expect(cid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(res.json().received['x-correlation-id']).toBe(cid);
+  });
+
 });
