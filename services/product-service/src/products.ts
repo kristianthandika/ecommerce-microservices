@@ -119,36 +119,13 @@ export function reserveStock(
 }
 
 /**
- * Compensation for `reserveStock`: returns the allocated units in one transaction.
- *
- * Idempotent — releasing twice restocks once. An unknown ID is recorded as a
- * tombstone, because the matching reserve request may still be in flight (its
- * response lost, or not yet delivered); without the tombstone it would allocate
- * stock after the order had already been cancelled.
+ * TODO m12.2 — kompensasi untuk `reserveStock`, dalam SATU transaksi:
+ * - receipt RESERVED → kembalikan stok tiap baris (`adjustStock`), tandai RELEASED
+ * - receipt sudah RELEASED → kembalikan apa adanya (idempoten, stok tidak bertambah lagi)
+ * - ID belum dikenal → simpan tombstone RELEASED supaya reserve yang terlambat ditolak
  */
-export function releaseReservation(id: string): Reservation {
-  return database.transaction(() => {
-    const releasedAt = new Date().toISOString();
-    const existing = reservations.get(id);
-    if (!existing) {
-      const tombstone: Reservation = {
-        id,
-        fingerprint: '',
-        items: [],
-        total: 0,
-        status: 'RELEASED',
-        releasedAt,
-      };
-      reservations.insert(id, tombstone);
-      return tombstone;
-    }
-    if (existing.status === 'RELEASED') return existing;
-    // A product deleted since the order has nowhere to return its stock to: no row changes.
-    for (const line of existing.items) adjustStock(line.productId, line.quantity);
-    const released: Reservation = { ...existing, status: 'RELEASED', releasedAt };
-    reservations.set(id, released);
-    return released;
-  });
+export function releaseReservation(_id: string): Reservation {
+  throw new AppError(501, 'Belum diimplementasikan (m12.2)', undefined, 'NOT_IMPLEMENTED');
 }
 
 export function listProducts(): Product[] {
