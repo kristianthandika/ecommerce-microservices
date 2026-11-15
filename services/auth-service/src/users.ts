@@ -115,18 +115,12 @@ export async function register(
       const mail = required && reserveMail('verification', email, now) ? 'verification' : 'none';
       return { user: { id: user.id, email }, mail };
     }
-    // TODO m12.8 — jawaban 409 di bawah memberi tahu SIAPA PUN bahwa alamat ini
-    // sudah punya akun (enumerasi akun). Ganti dengan:
-    // - akun sudah terverifikasi → jangan ubah apa pun; kembalikan
-    //   `{ user, mail: 'account-exists' }` (pemiliknya diberi tahu lewat email);
-    // - akun masih menunggu verifikasi (`pendingUntil` ada) → simpan password baru
-    //   dan perpanjang `pendingUntil`, supaya orang yang mendaftarkan alamat milik
-    //   orang lain tidak bisa menghalangi pemiliknya; kembalikan `mail: 'verification'`;
-    // - akun lama tanpa verifikasi → jangan ubah password; `mail: 'verification'`.
-    // Selalu lewat `reserveMail(...)` (kuota email) dan jangan pernah melempar error:
-    // route menjawab 202 yang sama untuk semua kasus.
-    void ttlMs;
-    throw new AppError(409, 'Email sudah terdaftar', undefined, 'EMAIL_TAKEN');
+    const user = { id: existing.id, email };
+    if (isVerified(existing))
+      return { user, mail: reserveMail('account-exists', email, now) ? 'account-exists' : 'none' };
+    if (existing.pendingUntil !== undefined)
+      save({ ...existing, passwordHash, pendingUntil: now + ttlMs });
+    return { user, mail: reserveMail('verification', email, now) ? 'verification' : 'none' };
   });
 }
 
@@ -152,11 +146,10 @@ export async function login(
   // hash umpan supaya waktu respons konsisten (tanpa ini, email tak dikenal
   // balik ~instan → bocor lewat timing). Urutan argumen: compare(plain, hash).
   const ok = await bcrypt.compare(password, user ? user.passwordHash : getDummyHash());
-  // TODO m12.8 — akun yang BELUM diverifikasi harus dijawab persis seperti password
-  // salah (dan dihitung sebagai kegagalan). Sekarang ia lolos ke sini lalu ditolak
-  // `accessTokenFor` dengan kode lain (INVALID_SESSION), sehingga "daftar lalu coba
-  // masuk" membocorkan apakah alamat itu sudah punya akun. Tambahkan `!isVerified(user)`.
-  if (!user || !ok) {
+  // An account that is not verified yet answers exactly like a wrong password and
+  // counts as a failure too. Otherwise "register, then try to sign in" would tell
+  // whether the address already belonged to somebody.
+  if (!user || !ok || !isVerified(user)) {
     if (trusted && deviceToken) recordDeviceFailure(deviceToken);
     else recordLoginFailure(email);
     throw new AppError(401, 'Email atau password salah', undefined, 'INVALID_CREDENTIALS');
