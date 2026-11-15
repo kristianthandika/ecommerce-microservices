@@ -12,7 +12,6 @@ import {
   unfinishedOrders,
   pageOrders,
   orderSummary,
-  heldByCustomer,
   clearOrderRows,
   type OrderPageQuery,
 } from './order-table.ts';
@@ -246,32 +245,13 @@ export async function cancelOrder(
 }
 
 /**
- * OWASP API6 (sensitive business flow): without payment, a confirmed order holds
- * stock indefinitely, so one account could take a whole product off the shelf.
- * Checked inside the transaction that creates the order; SQLite serializes writers,
- * so parallel requests from one customer cannot slip past the limit together.
+ * TODO m12.5 — OWASP API6: tolak order baru dengan 409 `HOLD_LIMIT_EXCEEDED` bila
+ * pelanggan sudah memegang `config.holdLimit.maxOpenOrders` pesanan aktif, atau bila
+ * `held + requested` satu produk melebihi `config.holdLimit.maxUnitsPerProduct`.
+ * Data yang dipegang: `heldByCustomer(userId)` dari order-table.ts. Sertakan
+ * `details` ({ limit, open } atau { productId, limit, held, requested }).
  */
-function assertWithinHoldLimit(userId: string, input: OrderItemInput[]): void {
-  const { maxOpenOrders, maxUnitsPerProduct } = config.holdLimit;
-  const held = heldByCustomer(userId);
-  if (held.openOrders >= maxOpenOrders)
-    throw new AppError(
-      409,
-      `Maksimal ${maxOpenOrders} pesanan aktif. Tunggu pesanan selesai atau batalkan salah satu.`,
-      { limit: maxOpenOrders, open: held.openOrders },
-      'HOLD_LIMIT_EXCEEDED',
-    );
-  for (const { productId, quantity } of input) {
-    const already = held.units.get(productId) ?? 0;
-    if (already + quantity > maxUnitsPerProduct)
-      throw new AppError(
-        409,
-        `Maksimal ${maxUnitsPerProduct} unit per produk dalam pesanan aktif.`,
-        { productId, limit: maxUnitsPerProduct, held: already, requested: quantity },
-        'HOLD_LIMIT_EXCEEDED',
-      );
-  }
-}
+function assertWithinHoldLimit(_userId: string, _input: OrderItemInput[]): void {}
 
 export async function createOrder(
   {
