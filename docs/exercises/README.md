@@ -62,7 +62,7 @@ bash scripts/dev/worktrees.sh --clean   # hapus folder-folder tadi
 
 ## Daftar lab
 
-Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (10 lab lagi).
+Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (9 lab lagi).
 
 | Modul | Lab                                                                           | Branch awal                             |
 | ----- | ----------------------------------------------------------------------------- | --------------------------------------- |
@@ -85,7 +85,7 @@ Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch st
 | 5–11  | [m5-m11 — Jembatan ke materi lanjutan (M5–M11)](m5-m11-materi-lanjutan.md)    | `bridge/m5-m11-materi-lanjutan`         |
 | 12    | [m12.1 — Konkurensi keranjang dengan If-Match/ETag](m12.1-cart-if-match.md)   | `starter/m12.1-cart-if-match`           |
 | 12    | [m12.2 — Pembatalan order sebagai saga](m12.2-cancel-saga.md)                 | `starter/m12.2-cancel-saga`             |
-| 12    | m12.3 — Refresh token berotasi                                                | `starter/m12.3-refresh-session`         |
+| 12    | [m12.3 — Refresh token berotasi](m12.3-refresh-session.md)                    | `starter/m12.3-refresh-session`         |
 | 12    | m12.4 — Order ke tabel relasional                                             | `starter/m12.4-relational-orders`       |
 | 12    | m12.5 — Batas tahan stok per pelanggan (API6)                                 | `starter/m12.5-hold-limit`              |
 | 12    | m12.6 — OpenAPI dan versi API (API9)                                          | `starter/m12.6-openapi-versioning`      |
