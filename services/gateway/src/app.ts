@@ -46,35 +46,56 @@ function upstreamFailure(
  * dicocokkan tanpa peduli huruf besar/kecil, karena router Express di belakang juga
  * tidak membedakannya. Service token tetap menjadi lapis kedua.
  *
- * TODO m12.12 — penjaga ini hanya memeriksa path yang DITERIMA. Proxy membentuk URL
- * upstream dengan parser URL WHATWG, yang membuang segmen titik (`.` dan `%2e`) dan
- * memperlakukan `\` sebagai `/`. Coba `/v1/auth/./internal/revocations`: lolos dari
- * sini lalu tiba di auth-service sebagai `/internal/revocations`. Normalisasi path
- * dengan `new URL(path, 'http://gateway.invalid').pathname` (setelah dan sebelum
- * decode) dan tolak bila SALAH SATU tafsiran menunjuk route internal.
+ * Yang dicocokkan adalah path yang AKAN DIKIRIM, bukan hanya yang diterima: proxy
+ * membentuk URL upstream lewat parser URL WHATWG, yang membuang segmen titik dan
+ * menganggap `\` sebagai `/`. Tanpa normalisasi yang sama, `/auth/./internal/...`,
+ * `/auth/%2e/internal/...` dan `/auth/.\internal/...` lolos dari penjaga ini lalu
+ * tiba di upstream sebagai `/internal/...`.
  */
 const INTERNAL_PATH = /^\/+(?:v1\/+)?[^/]+\/+internal(?:\/|$)/i;
 
-export function isInternalPath(url: string): boolean {
-  const path = url.split('?')[0];
-  let decoded = path;
+function decodePath(path: string): string {
   try {
-    decoded = decodeURIComponent(path);
+    return decodeURIComponent(path);
   } catch {
     // Escape yang rusak dicocokkan apa adanya; upstream akan menolaknya.
+    return path;
   }
-  return INTERNAL_PATH.test(decoded);
+}
+
+/** Path seperti yang dihasilkan parser URL (segmen titik hilang, `\` menjadi `/`). */
+function normalizePath(path: string): string | undefined {
+  try {
+    // Satu garis miring di depan: `//host/...` tidak boleh terbaca sebagai nama host.
+    return new URL(path.replace(/^[/\\]+/, '/'), 'http://gateway.invalid').pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isInternalPath(url: string): boolean {
+  const path = url.split('?')[0];
+  const decoded = decodePath(path);
+  // Ditolak bila SALAH SATU tafsiran menunjuk route internal: apa adanya, setelah
+  // dinormalisasi, atau di-decode dulu baru dinormalisasi (mis. `.%2Finternal`).
+  return [decoded, normalizePath(path), normalizePath(decoded)].some(
+    (candidate) => candidate !== undefined && INTERNAL_PATH.test(decodePath(candidate)),
+  );
 }
 
 /**
- * TODO m12.12 — header respons upstream sebelum sampai ke klien. Versi starter
- * meneruskan apa adanya, sehingga `access-control-allow-origin` bawaan service
- * (origin pengembangan) menimpa `CORS_ORIGIN` milik gateway, dan respons berisi data
- * pengguna boleh di-cache browser/proxy. Buang semua header `access-control-*` dan
- * pasang `cache-control: no-store` bila upstream tidak menyatakan aturan cache sendiri.
+ * Header respons upstream sebelum sampai ke klien. Gateway adalah satu-satunya
+ * pemegang kebijakan CORS: header `access-control-*` dari service di belakangnya
+ * dibuang, karena nilai bawaan service (origin pengembangan) akan menimpa kebijakan
+ * gateway. Respons tanpa `cache-control` dianggap data pengguna dan tidak boleh
+ * disimpan browser/proxy; service yang memang boleh di-cache (JWKS) menyatakannya sendiri.
  */
 export function edgeResponseHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
-  return headers;
+  const result: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers))
+    if (!name.toLowerCase().startsWith('access-control-')) result[name] = value;
+  result['cache-control'] ??= 'no-store';
+  return result;
 }
 
 /**
@@ -102,9 +123,9 @@ export async function buildApp({
     },
     // Trust forwarded IPs only from explicitly configured frontend proxy addresses.
     trustProxy: process.env.TRUSTED_PROXY_CIDR?.split(',') ?? false,
-    // TODO m12.12 — bawaan Fastify `requestTimeout` adalah 0 (tanpa batas): klien yang
-    // mengirim body sedikit demi sedikit bisa menahan koneksi selamanya. Pasang
-    // `requestTimeout: config.requestTimeoutMs`.
+    // Bawaan Fastify adalah 0 (tanpa batas): klien yang mengirim body sedikit demi
+    // sedikit bisa menahan koneksi selamanya. Sama dengan batas service di belakangnya.
+    requestTimeout: config.requestTimeoutMs,
   });
 
   app.setErrorHandler<{ statusCode?: number; message: string }>((error, request, reply) => {
