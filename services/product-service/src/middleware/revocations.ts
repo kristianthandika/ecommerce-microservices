@@ -1,4 +1,4 @@
-import { AppError } from './errors.ts';
+// TODO m12.7 — butuh `import { AppError } from './errors.ts';` untuk jawaban 503.
 
 /**
  * Upper bound of one snapshot. It must cover the largest list the caller accepts
@@ -65,52 +65,17 @@ export interface RevocationCheckerOptions {
  *    Attempts are coalesced and back off, including on the very first failure.
  */
 export function createRevocationChecker(
-  fetchRevoked: () => Promise<Iterable<string>>,
-  { maxAgeMs = 5000, cooldownMs = 5000, now = Date.now, onError }: RevocationCheckerOptions = {},
+  _fetchRevoked: () => Promise<Iterable<string>>,
+  _options: RevocationCheckerOptions = {},
 ): (sid: string) => Promise<boolean> {
-  let revoked = new Set<string>();
-  let fetchedAt: number | undefined; // last SUCCESSFUL refresh
-  let failedAt: number | undefined;
-  let refreshing: Promise<void> | undefined;
-
-  function refresh(): Promise<void> {
-    if (!refreshing) {
-      const startedAt = now();
-      // Concurrent requests share one fetch.
-      refreshing = Promise.resolve()
-        .then(fetchRevoked)
-        .then((next) => {
-          revoked = new Set(next);
-          fetchedAt = startedAt;
-          failedAt = undefined;
-        })
-        .catch((err: unknown) => {
-          failedAt = now();
-          onError?.(err);
-        })
-        .finally(() => {
-          refreshing = undefined;
-        });
-    }
-    return refreshing;
-  }
-
-  return async (sid) => {
-    // A revoked session cannot become valid again; no network is needed to deny it.
-    if (revoked.has(sid)) return true;
-    const fresh = fetchedAt !== undefined && now() - fetchedAt < maxAgeMs;
-    if (!fresh) {
-      const failedRecently = failedAt !== undefined && now() - failedAt < cooldownMs;
-      if (refreshing || !failedRecently) await refresh();
-    }
-    if (revoked.has(sid)) return true;
-    if (fetchedAt === undefined || now() - fetchedAt >= maxAgeMs)
-      throw new AppError(
-        503,
-        'Status sesi belum dapat diverifikasi. Coba lagi sebentar.',
-        undefined,
-        'SESSION_CHECK_UNAVAILABLE',
-      );
-    return revoked.has(sid);
-  };
+  // TODO m12.7 — versi starter menerima SEMUA sesi, jadi access token yang sudah
+  // logout tetap berlaku sampai kedaluwarsa (15 menit). Implementasikan:
+  // 1. simpan daftar sid yang dicabut + waktu refresh terakhir yang BERHASIL;
+  // 2. daftar lebih muda dari `maxAgeMs` → jawab dari memory tanpa network;
+  // 3. daftar lebih tua → refresh dulu (request menunggu); request bersamaan
+  //    berbagi SATU fetch; setelah gagal, tunggu `cooldownMs` sebelum mencoba lagi;
+  // 4. sid yang pernah terlihat dicabut tetap ditolak walau refresh gagal;
+  // 5. tidak ada daftar segar → lempar AppError 503 SESSION_CHECK_UNAVAILABLE
+  //    (fail closed: jangan menerima sesi berdasarkan data basi).
+  return async () => false;
 }
