@@ -1,0 +1,12 @@
+# Jangan copy artefak lokal ke build context — di-install/build ulang di image.
+**/node_modules
+**/dist
+**/coverage
+.git
+.gitignore
+**/*.log
+.env
+.env.local
+services/auth-service/keys
+**/loadtest-*.txt
+**/loadtest-*.json
