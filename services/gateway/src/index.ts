@@ -1,8 +1,11 @@
 import { config } from './config.ts';
+import { startTracing, shutdownTracing } from './tracing.ts';
 import { buildApp } from './app.ts';
 
-// m3.1/m3.2 — belum ada tracing (ditambahkan di m3.3).
-const app = await buildApp();
+// Mulai tracing SEBELUM app dibuat supaya instrumentasi aktif.
+startTracing();
+
+const app = await buildApp({ enableTracing: true });
 
 try {
   await app.listen({ port: config.port, host: config.host });
@@ -15,6 +18,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, async () => {
     app.log.info({ signal }, 'shutting down gateway');
     await app.close();
+    await shutdownTracing();
     process.exit(0);
   });
 }

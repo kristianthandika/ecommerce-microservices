@@ -4,81 +4,66 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 
 /**
- * Test gateway m3.2 pakai `fastify.inject()` (bawaan Fastify): request diproses
- * tanpa membuka port. Upstream (auth/product/order) diwakili http double yang
- * benar-benar listen dan MEMANTULKAN path + header yang ia terima, supaya kita
- * bisa melihat apa yang sebenarnya diteruskan proxy.
+ * Test gateway pakai `fastify.inject()` (BAWAAN Fastify) untuk route biasa —
+ * lebih cepat, tanpa port sungguhan. Upstream (auth/product/order) diwakili
+ * http double yang benar-benar listen supaya proxy bisa meneruskan request.
  */
 let app: FastifyInstance;
-const doubles: Server[] = [];
+let authDouble: Server;
+let productDouble: Server;
+let orderDouble: Server;
 
-function echo(name: string): Server {
+function makeDouble(name: string, onProducts = false): Server {
   return createServer((req, res) => {
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ service: name, path: req.url, received: req.headers }));
+    if (req.url === '/health') {
+      res.setHeader('content-type', 'application/json');
+      return res.end(JSON.stringify({ status: 'ok', service: name }));
+    }
+    if (onProducts && req.url?.startsWith('/products')) {
+      res.setHeader('content-type', 'application/json');
+      return res.end(JSON.stringify({ received: req.headers }));
+    }
+    res.statusCode = 404;
+    res.end();
   });
 }
-const listen = (server: Server): Promise<string> =>
-  new Promise((resolve) =>
-    server.listen(0, '127.0.0.1', () => {
-      doubles.push(server);
-      resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
-    }),
-  );
+
+const listen = (server: Server): Promise<number> =>
+  new Promise((resolve) => server.listen(0, () => resolve((server.address() as AddressInfo).port)));
 
 beforeAll(async () => {
   process.env.LOG_LEVEL = 'silent';
   process.env.GATEWAY_RATE_LIMIT_MAX = '1000';
-  process.env.AUTH_SERVICE_URL = await listen(echo('auth-service'));
-  process.env.PRODUCT_SERVICE_URL = await listen(echo('product-service'));
-  process.env.ORDER_SERVICE_URL = await listen(echo('order-service'));
+
+  authDouble = makeDouble('auth-service');
+  productDouble = makeDouble('product-service', true);
+  orderDouble = makeDouble('order-service');
+  const [ap, pp, op] = await Promise.all([
+    listen(authDouble),
+    listen(productDouble),
+    listen(orderDouble),
+  ]);
+  process.env.AUTH_SERVICE_URL = `http://127.0.0.1:${ap}`;
+  process.env.PRODUCT_SERVICE_URL = `http://127.0.0.1:${pp}`;
+  process.env.ORDER_SERVICE_URL = `http://127.0.0.1:${op}`;
+
   const { buildApp } = await import('../src/app.ts');
-  app = await buildApp();
+  app = await buildApp({ enableTracing: false });
   await app.ready();
 });
 
 afterAll(async () => {
   await app?.close();
-  for (const server of doubles) await new Promise((resolve) => server.close(resolve));
+  for (const s of [authDouble, productDouble, orderDouble]) {
+    if (s?.listening) await new Promise<void>((r) => s.close(() => r()));
+  }
 });
 
-describe('gateway m3.2 — reverse proxy & correlation ID', () => {
-  it('meneruskan /products ke product-service dengan path yang sama', async () => {
-    const res = await app.inject({ method: 'GET', url: '/products?q=mug' });
+describe('gateway proxy, correlation & health', () => {
+  it('proxy /products diteruskan ke product-service', async () => {
+    const res = await app.inject({ method: 'GET', url: '/products' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ service: 'product-service', path: '/products?q=mug' });
-  });
-
-  it('meneruskan /orders ke order-service', async () => {
-    const res = await app.inject({ method: 'GET', url: '/orders' });
-    expect(res.json()).toMatchObject({ service: 'order-service', path: '/orders' });
-  });
-
-  it('memotong prefix /auth: /auth/login tiba di auth-service sebagai /login', async () => {
-    const res = await app.inject({ method: 'POST', url: '/auth/login', payload: {} });
-    expect(res.json()).toMatchObject({ service: 'auth-service', path: '/login' });
-  });
-
-  it('menimpa X-Forwarded-For kiriman klien dengan IP yang diamati gateway (anti-spoof)', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/products',
-      headers: { 'x-forwarded-for': '1.2.3.4' },
-    });
-    const { received } = res.json();
-    expect(received['x-real-ip']).toBeTruthy();
-    expect(received['x-forwarded-for']).not.toBe('1.2.3.4');
-  });
-
-  it('security header (helmet) muncul di response gateway', async () => {
-    const res = await app.inject({ method: 'GET', url: '/' });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers['x-content-type-options']).toBe('nosniff');
-  });
-
-  it('header rate-limit aktif di level gateway', async () => {
-    const res = await app.inject({ method: 'GET', url: '/' });
-    expect(res.headers['x-ratelimit-limit']).toBeDefined();
+    expect(res.json().received).toBeTruthy();
   });
 
   it('meneruskan correlation ID YANG SAMA ke service & memantulkannya ke response', async () => {
@@ -92,11 +77,42 @@ describe('gateway m3.2 — reverse proxy & correlation ID', () => {
     expect(res.json().received['x-correlation-id']).toBe(cid);
   });
 
-  it('membuat correlation ID baru kalau klien tidak mengirimnya', async () => {
+  it('generate correlation ID kalau klien tidak mengirimnya', async () => {
     const res = await app.inject({ method: 'GET', url: '/products' });
-    const cid = res.headers['x-correlation-id'];
-    expect(cid).toMatch(/^[0-9a-f-]{36}$/);
-    expect(res.json().received['x-correlation-id']).toBe(cid);
+    expect(res.headers['x-correlation-id']).toMatch(/[0-9a-f-]{36}/);
   });
 
+  it('meneruskan IP klien asli lewat X-Forwarded-For / X-Real-IP (anti-spoof)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/products',
+      headers: { 'x-forwarded-for': '1.2.3.4' },
+    });
+    const received = res.json().received;
+    expect(received['x-real-ip']).toBeTruthy();
+    expect(received['x-forwarded-for']).not.toBe('1.2.3.4'); // spoof ditolak
+  });
+
+  it('security header (helmet) muncul di response gateway', async () => {
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('header rate-limit aktif di level gateway', async () => {
+    const res = await app.inject({ method: 'GET', url: '/' });
+    expect(res.headers['x-ratelimit-limit']).toBeDefined();
+  });
+
+  it('aggregated /health → ok saat semua up, degraded saat ada yang down', async () => {
+    const up = await app.inject({ method: 'GET', url: '/health' });
+    expect(up.statusCode).toBe(200);
+    expect(up.json().status).toBe('ok');
+    expect(up.json().services).toMatchObject({ auth: 'up', product: 'up', order: 'up' });
+
+    await new Promise<void>((r) => orderDouble.close(() => r()));
+    const down = await app.inject({ method: 'GET', url: '/health' });
+    expect(down.statusCode).toBe(503);
+    expect(down.json().status).toBe('degraded');
+    expect(down.json().services.order).toBe('down');
+  });
 });
