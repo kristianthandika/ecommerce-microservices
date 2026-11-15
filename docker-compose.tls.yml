@@ -1,0 +1,37 @@
+# Optional TLS and file-based secret configuration. Supply your own certificate.
+services:
+  auth-service:
+    environment:
+      SEED_ADMIN_PASSWORD: ''
+      SEED_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      INTERNAL_SERVICE_TOKEN: ''
+      INTERNAL_SERVICE_TOKEN_FILE: /run/secrets/service_token
+      PUBLIC_APP_URL: ${FRONTEND_ORIGIN:-https://localhost:443}
+      REFRESH_ALLOWED_ORIGINS: https://localhost,https://localhost:${HTTPS_PORT:-443},https://127.0.0.1:${HTTPS_PORT:-443}
+    secrets: [admin_password, service_token]
+  product-service:
+    environment:
+      INTERNAL_SERVICE_TOKEN: ''
+      INTERNAL_SERVICE_TOKEN_FILE: /run/secrets/service_token
+    secrets: [service_token]
+  order-service:
+    environment:
+      INTERNAL_SERVICE_TOKEN: ''
+      INTERNAL_SERVICE_TOKEN_FILE: /run/secrets/service_token
+    secrets: [service_token]
+  gateway:
+    ports: !override []
+  frontend:
+    ports: !override ['127.0.0.1:${HTTPS_PORT:-443}:8443']
+    secrets: [tls_cert, tls_key]
+    volumes:
+      - ./frontend/nginx.tls.conf:/etc/nginx/conf.d/tls.conf:ro
+secrets:
+  tls_cert:
+    file: ${TLS_CERT_FILE:?Set TLS_CERT_FILE}
+  tls_key:
+    file: ${TLS_KEY_FILE:?Set TLS_KEY_FILE}
+  admin_password:
+    file: ${ADMIN_PASSWORD_FILE:?Set ADMIN_PASSWORD_FILE}
+  service_token:
+    file: ${SERVICE_TOKEN_FILE:?Set SERVICE_TOKEN_FILE}

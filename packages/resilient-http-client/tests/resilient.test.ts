@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, vi } from 'vitest';
 import {
   withTimeout,
@@ -64,7 +66,7 @@ describe('withRetry', () => {
     let calls = 0;
     const flaky = async () => {
       calls += 1;
-      if (calls < 3) throw new Error('gagal sementara');
+      if (calls < 3) throw new TypeError('gagal sementara');
       return okResponse();
     };
     const wrapped = withRetry(flaky, { retries: 3, baseDelayMs: 1 });
@@ -77,7 +79,7 @@ describe('withRetry', () => {
     let calls = 0;
     const always = async () => {
       calls += 1;
-      throw new Error('selalu gagal');
+      throw new TypeError('selalu gagal');
     };
     const wrapped = withRetry(always, { retries: 2, baseDelayMs: 1 });
     await expect(wrapped('http://x')).rejects.toThrow('selalu gagal');
@@ -92,7 +94,7 @@ describe('withRetry', () => {
       return 0;
     });
     const always = async () => {
-      throw new Error('x');
+      throw new TypeError('x');
     };
     await withRetry(always, { retries: 3, baseDelayMs: 100, jitter: false })('http://x').catch(
       () => {},
@@ -190,5 +192,60 @@ describe('createResilientClient (komposisi)', () => {
     const callsAfterOpen = calls;
     await client('http://x').catch(() => {}); // ditolak cepat
     expect(calls).toBe(callsAfterOpen); // tidak bertambah setelah OPEN
+  });
+});
+
+describe('audit regressions', () => {
+  it('enforces timeout after headers while reading a slow body', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200);
+      res.flushHeaders();
+      const timer = setTimeout(() => res.end('{}'), 250);
+      res.on('close', () => clearTimeout(timer));
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      await expect(withTimeout(fetch, 40)(url)).rejects.toBeInstanceOf(TimeoutError);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('does not retry cancellation or unsafe POST requests', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    const fn = async () => {
+      calls++;
+      throw new TypeError('network');
+    };
+    await withRetry(fn)('http://x', { signal: controller.signal }).catch(() => {});
+    expect(calls).toBe(0);
+    await withRetry(fn)('http://x', { method: 'POST' }).catch(() => {});
+    expect(calls).toBe(1);
+  });
+  it('ignores a stale successful request after another request opened the breaker', async () => {
+    let finish!: (res: Response) => void;
+    let calls = 0;
+    const target = async () => {
+      if (++calls === 1)
+        return new Promise<Response>((resolve) => {
+          finish = resolve;
+        });
+      throw new Error('down');
+    };
+    const wrapped = withCircuitBreaker(target, { failureThreshold: 1, resetTimeoutMs: 10000 });
+    const slow = wrapped('http://x');
+    await wrapped('http://x').catch(() => {});
+    finish(new Response('ok'));
+    await slow;
+    await expect(wrapped('http://x')).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(calls).toBe(2);
+  });
+  it('cancels oversized responses', async () => {
+    await expect(
+      withTimeout(async () => new Response('123456'), 100, 5)('http://x'),
+    ).rejects.toThrow('size limit');
   });
 });

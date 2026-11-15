@@ -19,11 +19,12 @@ const kid = createHash('sha256')
 const jwk = { ...jwkBase, kid, use: 'sig', alg: 'RS256' };
 
 const sign = (role: string): string =>
-  jwt.sign({ role }, privateKey, {
+  jwt.sign({ role, sid: 'test-session', email_verified: true }, privateKey, {
     algorithm: 'RS256',
     keyid: kid,
     subject: `user-${role}`,
     issuer: 'auth-service',
+    audience: 'ecommerce-api',
     expiresIn: '1h',
   });
 const adminToken = sign('admin');
@@ -41,6 +42,9 @@ beforeAll(async () => {
       jwksHits += 1;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ keys: [jwk] }));
+    } else if (req.url === '/internal/revocations') {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ revoked: [] }));
     } else {
       res.statusCode = 404;
       res.end();
@@ -87,6 +91,36 @@ describe('product-service distributed auth & RBAC', () => {
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('request cacat sebelum route (URL/encoding rusak) → 4xx, bukan 500', async () => {
+    // Percent-encoding yang tidak bisa di-decode: Express melempar URIError ber-status 400.
+    const badPath = await request(app).get('/products/%E0%A4%A');
+    expect(badPath.status).toBe(400);
+    expect(badPath.body.error).toEqual({ message: 'Request tidak valid', code: 'BAD_REQUEST' });
+
+    const badEncoding = await request(app)
+      .post('/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'x-unknown')
+      .send('{"name":"Produk","price":1000}');
+    expect(badEncoding.status).toBe(415);
+    expect(badEncoding.body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+  });
+
+  it('nama produk berisi spasi saja → 400, dan nama valid di-trim', async () => {
+    const blank = await request(app)
+      .post('/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: '   ', price: 1000 });
+    expect(blank.status).toBe(400);
+    const padded = await request(app)
+      .post('/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: '  Topi Inixindo  ', price: 1000 });
+    expect(padded.status).toBe(201);
+    expect(padded.body.product.name).toBe('Topi Inixindo');
+  });
+
   it('POST admin valid → 201 (panggilan PERTAMA memicu fetch JWKS)', async () => {
     const res = await request(app)
       .post('/products')
@@ -96,7 +130,30 @@ describe('product-service distributed auth & RBAC', () => {
     expect(jwksHits).toBeGreaterThanOrEqual(1);
   });
 
-  it('setelah auth-service MATI, verifikasi token berikutnya TETAP berhasil (cache jwks-rsa)', async () => {
+  it('banjir token palsu ber-kid acak TIDAK menghabiskan kuota JWKS milik user sah', async () => {
+    const hitsBefore = jwksHits;
+    for (let i = 0; i < 15; i += 1) {
+      const forged = jwt.sign({ role: 'admin' }, privateKey, {
+        algorithm: 'RS256',
+        keyid: `forged-${i}`,
+        subject: 'attacker',
+        issuer: 'auth-service',
+        audience: 'ecommerce-api',
+        expiresIn: '1h',
+      });
+      const res = await request(app)
+        .get('/products/admin/summary')
+        .set('Authorization', `Bearer ${forged}`);
+      expect(res.status).toBe(401); // bukan 503: kuota fetch tidak ikut habis
+    }
+    expect(jwksHits - hitsBefore).toBeLessThanOrEqual(1); // dibatasi cooldown
+    const legit = await request(app)
+      .get('/products/admin/summary')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(legit.status).toBe(200);
+  });
+
+  it('auth outage uses cached keys only while the revocation snapshot is still fresh', async () => {
     await new Promise<void>((r) => fakeServer.close(() => r()));
     const hitsBefore = jwksHits;
 

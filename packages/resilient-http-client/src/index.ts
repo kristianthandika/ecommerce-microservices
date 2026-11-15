@@ -39,39 +39,73 @@ export class ServerError extends Error {
   }
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    function abort() {
+      clearTimeout(timer);
+      cleanup();
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
 
 /**
  * withTimeout — batalkan request yang lebih lama dari `ms` lewat AbortController.
  * Kalau caller sudah memberi `options.signal`, kedua signal digabung supaya
  * pembatalan dari mana pun tetap dihormati.
  */
-export function withTimeout(fetchFn: FetchFn, ms: number): FetchFn {
+export function withTimeout(fetchFn: FetchFn, ms: number, maxBodyBytes = 1_048_576): FetchFn {
   return async (url, options = {}) => {
     const controller = new AbortController();
     let timedOut = false;
+    options.signal?.throwIfAborted();
+    const abort = () => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, ms);
-
-    if (options.signal) {
-      if (options.signal.aborted) controller.abort();
-      else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
-
     try {
-      return await fetchFn(url, { ...options, signal: controller.signal });
-    } catch (err) {
-      // HANYA klasifikasikan sebagai TimeoutError kalau timeout yang memicu abort.
-      // Pembatalan oleh caller (options.signal) diteruskan apa adanya (jangan
-      // di-retry sebagai timeout).
-      if (timedOut && err instanceof Error && err.name === 'AbortError') {
-        throw new TimeoutError(ms);
+      const response = await fetchFn(url, { ...options, signal: controller.signal });
+      if (!response.body) return response;
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > maxBodyBytes) throw new Error('Upstream response exceeds size limit');
+          chunks.push(value);
+        }
+      } catch (err) {
+        await reader.cancel().catch(() => {});
+        throw err;
+      } finally {
+        reader.releaseLock();
       }
+      const headers = new Headers(response.headers);
+      headers.delete('content-encoding');
+      headers.delete('content-length');
+      return new Response(Buffer.concat(chunks), {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    } catch (err) {
+      if (timedOut) throw new TimeoutError(ms);
       throw err;
     } finally {
       clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abort);
     }
   };
 }
@@ -95,16 +129,30 @@ export function withRetry(
   { retries = 3, baseDelayMs = 100, jitter = true }: RetryOptions = {},
 ): FetchFn {
   return async (url, options = {}) => {
+    const method = (options.method ?? 'GET').toUpperCase();
+    const safe =
+      ['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'].includes(method) ||
+      new Headers(options.headers).has('idempotency-key');
+    const attempts = safe ? retries : 0;
     let lastError: unknown;
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
+    for (let attempt = 0; attempt <= attempts; attempt += 1) {
+      options.signal?.throwIfAborted();
       try {
         return await fetchFn(url, options);
       } catch (err) {
+        if (options.signal?.aborted || (err instanceof Error && err.name === 'AbortError'))
+          throw err;
+        const retryable =
+          err instanceof TypeError ||
+          err instanceof TimeoutError ||
+          err instanceof ServerError ||
+          (err instanceof Error && /ECONN|network|fetch failed/i.test(err.message));
+        if (!retryable) throw err;
         lastError = err;
-        if (attempt === retries) break; // percobaan terakhir gagal → menyerah
-        const exp = baseDelayMs * 2 ** attempt;
+        if (attempt === attempts) break; // percobaan terakhir gagal → menyerah
+        const exp = Math.min(baseDelayMs * 2 ** attempt, 10000);
         const delay = jitter ? Math.random() * exp : exp;
-        await sleep(delay); // WAJIB di-await — kalau tidak, retry jadi spam tanpa jeda
+        await sleep(delay, options.signal); // WAJIB di-await — kalau tidak, retry jadi spam tanpa jeda
       }
     }
     throw lastError;
@@ -139,16 +187,19 @@ export function withCircuitBreaker(
   let state: CircuitState = 'CLOSED';
   let failures = 0;
   let nextAttempt = 0;
+  let generation = 0;
   let probing = false; // true saat SATU probe HALF_OPEN sedang berjalan
 
   const transition = (next: CircuitState): void => {
     if (state !== next) {
       state = next;
+      generation++;
       onStateChange?.(next);
     }
   };
 
   return async (url, options = {}) => {
+    options.signal?.throwIfAborted();
     if (state === 'OPEN') {
       if (Date.now() < nextAttempt) throw new CircuitOpenError(name);
       transition('HALF_OPEN'); // waktu reset lewat → izinkan satu probe
@@ -162,13 +213,24 @@ export function withCircuitBreaker(
       probing = true;
     }
 
+    const requestGeneration = generation;
     try {
       const res = await fetchFn(url, options);
+      if (requestGeneration !== generation) return res;
       failures = 0;
       probing = false;
       transition('CLOSED');
       return res;
     } catch (err) {
+      if (requestGeneration !== generation) throw err;
+      if (options.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
+        probing = false;
+        if (state === 'HALF_OPEN') {
+          transition('OPEN');
+          nextAttempt = Date.now() + resetTimeoutMs;
+        }
+        throw err;
+      }
       failures += 1;
       probing = false;
       if (state === 'HALF_OPEN' || failures >= failureThreshold) {
@@ -187,7 +249,10 @@ export function withCircuitBreaker(
 export function throwOnServerError(fetchFn: FetchFn): FetchFn {
   return async (url, options = {}) => {
     const res = await fetchFn(url, options);
-    if (res.status >= 500) throw new ServerError(res.status);
+    if (res.status >= 500) {
+      await res.body?.cancel();
+      throw new ServerError(res.status);
+    }
     return res;
   };
 }
@@ -195,6 +260,7 @@ export function throwOnServerError(fetchFn: FetchFn): FetchFn {
 export interface ResilientClientOptions {
   fetchImpl?: FetchFn;
   timeoutMs?: number;
+  totalTimeoutMs?: number;
   retries?: number;
   baseDelayMs?: number;
   jitter?: boolean;
@@ -217,6 +283,7 @@ export interface ResilientClientOptions {
 export function createResilientClient({
   fetchImpl = fetch,
   timeoutMs = 2000,
+  totalTimeoutMs = 8000,
   retries = 2,
   baseDelayMs = 100,
   jitter = true,
@@ -230,5 +297,5 @@ export function createResilientClient({
   if (treat5xxAsFailure) layer = throwOnServerError(layer);
   layer = withRetry(layer, { retries, baseDelayMs, jitter });
   layer = withCircuitBreaker(layer, { failureThreshold, resetTimeoutMs, name, onStateChange });
-  return layer;
+  return withTimeout(layer, totalTimeoutMs);
 }

@@ -14,17 +14,21 @@ export function HealthWidget() {
 
   useEffect(() => {
     let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController();
     async function tick() {
-      const data = await api.health();
+      const data = await api.health(controller.signal);
       if (!active) return;
       setHealth(data);
       setUpdatedAt(new Date().toLocaleTimeString('id-ID'));
+      timer = setTimeout(tick, POLL_INTERVAL_MS);
     }
-    tick();
-    const id = setInterval(tick, POLL_INTERVAL_MS);
+    void tick();
+
     return () => {
       active = false;
-      clearInterval(id);
+      clearTimeout(timer);
+      controller.abort();
     };
   }, []);
 
@@ -37,9 +41,7 @@ export function HealthWidget() {
         <h2 className="text-lg font-semibold text-primary">Status Layanan</h2>
         <span
           className={`text-xs font-medium px-2 py-1 rounded-full ${
-            health?.status === 'ok'
-              ? 'bg-success/10 text-success'
-              : 'bg-danger/10 text-danger'
+            health?.status === 'ok' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
           }`}
         >
           {health ? (health.status === 'ok' ? 'Semua normal' : 'Ada gangguan') : 'Memuat…'}

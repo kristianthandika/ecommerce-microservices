@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { generateKeyPairSync, createPublicKey, createHash, type JsonWebKey } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
@@ -22,11 +23,12 @@ const kid = createHash('sha256')
   .update(JSON.stringify({ e: jwkBase.e, kty: jwkBase.kty, n: jwkBase.n }))
   .digest('base64url');
 const jwk = { ...jwkBase, kid, use: 'sig', alg: 'RS256' };
-const token = jwt.sign({ role: 'user' }, privateKey, {
+const token = jwt.sign({ role: 'user', sid: 'test-session', email_verified: true }, privateKey, {
   algorithm: 'RS256',
   keyid: kid,
   subject: 'user-1',
   issuer: 'auth-service',
+  audience: 'ecommerce-api',
   expiresIn: '1h',
 });
 
@@ -49,11 +51,17 @@ beforeAll(async () => {
   process.env.PRODUCT_RETRY_BASE_MS = '20';
   process.env.PRODUCT_CB_THRESHOLD = '3';
   process.env.PRODUCT_CB_RESET_MS = '600';
+  // Resilience, not the per-customer hold limit, is under test: outages leave orders PENDING.
+  process.env.ORDER_MAX_OPEN_ORDERS = '100';
+  process.env.ORDER_MAX_UNITS_PER_PRODUCT = '1000';
 
   authServer = createServer((req, res) => {
     if (req.url?.startsWith('/.well-known/jwks.json')) {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ keys: [jwk] }));
+    } else if (req.url === '/internal/revocations') {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ revoked: [] }));
     } else {
       res.statusCode = 404;
       res.end();
@@ -69,9 +77,25 @@ beforeAll(async () => {
       res.statusCode = 503;
       return res.end('unavailable');
     }
-    const id = req.url?.split('/').pop() ?? 'p1';
+    const id = req.url?.split('/').pop();
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ product: { id, name: 'Kaos', price: 100000, stock: 100 } }));
+    res.end(
+      JSON.stringify({
+        reservation: {
+          id,
+          items: [
+            {
+              productId: '11111111-1111-4111-8111-111111111111',
+              name: 'Kaos',
+              unitPrice: 100000,
+              quantity: 2,
+              subtotal: 200000,
+            },
+          ],
+          total: 200000,
+        },
+      }),
+    );
   });
   await new Promise<void>((r) => productDouble.listen(0, r));
   process.env.PRODUCT_SERVICE_URL = `http://127.0.0.1:${port(productDouble)}`;
@@ -92,8 +116,14 @@ afterAll(async () => {
 async function postOrder(): Promise<Response> {
   return fetch(`${orderBase}/orders`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ items: [{ productId: 'p1', quantity: 2 }] }),
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`,
+      'idempotency-key': randomUUID(),
+    },
+    body: JSON.stringify({
+      items: [{ productId: '11111111-1111-4111-8111-111111111111', quantity: 2 }],
+    }),
   });
 }
 

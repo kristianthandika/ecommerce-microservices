@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { ZodTypeAny } from 'zod';
+import type { ZodType } from 'zod';
 
 type Source = 'body' | 'query' | 'params';
 
@@ -11,7 +11,7 @@ type Source = 'body' | 'query' | 'params';
  * sampai ke error handler terpusat dan dipetakan jadi response 400 (BUKAN
  * 500). Data yang sudah ter-parse & ter-sanitasi ditaruh di `req.validated`.
  */
-export function validate(schema: ZodTypeAny, source: Source = 'body') {
+export function validate(schema: ZodType, source: Source = 'body') {
   return (req: Request, _res: Response, next: NextFunction): void => {
     req.validated = schema.parse(req[source]);
     next();

@@ -14,11 +14,17 @@ export function createApp({
   app.set('trust proxy', 1);
   app.use(helmet());
   app.use(cors({ origin: config.corsOrigin, credentials: true }));
-  app.use(express.json());
   app.use(createHttpLogger(logger));
+  app.use(express.json({ limit: '100kb' }));
   app.use(
     rateLimit({
-      windowMs: 15 * 60 * 1000,
+      // Backstop di belakang gateway (100/menit/IP), sengaja lebih longgar.
+      windowMs: 60 * 1000,
+      skip: (req) => req.path === '/health',
+      handler: (_req, res) =>
+        res
+          .status(429)
+          .json({ error: { message: 'Terlalu banyak request', code: 'RATE_LIMITED' } }),
       limit: 300,
       standardHeaders: true,
       legacyHeaders: false,

@@ -32,6 +32,8 @@ export function createLogger(name: string): Logger {
       paths: [
         'req.headers.authorization',
         'req.headers.cookie',
+        'req.headers["x-service-token"]',
+        'res.headers["set-cookie"]',
         'password',
         '*.password',
         'req.body.password',
@@ -52,6 +54,20 @@ export function createLogger(name: string): Logger {
 }
 
 /**
+ * Identitas dari token yang SUDAH diverifikasi middleware auth (`req.user`): ID
+ * pengguna, role, dan sesi. Request anonim atau yang ditolak tidak punya pelaku.
+ */
+function actorOf(req: IncomingMessage): { userId?: string; role?: string; sessionId?: string } {
+  const user = (req as IncomingMessage & { user?: Record<string, unknown> }).user;
+  if (!user || typeof user.sub !== 'string') return {};
+  return {
+    userId: user.sub,
+    ...(typeof user.role === 'string' ? { role: user.role } : {}),
+    ...(typeof user.sid === 'string' ? { sessionId: user.sid } : {}),
+  };
+}
+
+/**
  * Middleware `pino-http` untuk service Express — request-scoped logging yang
  * SELALU menyertakan correlation ID.
  *
@@ -67,7 +83,8 @@ export function createHttpLogger(logger: Logger): HttpLogger {
     logger,
     genReqId(req: IncomingMessage, res: ServerResponse) {
       const existing = req.headers[CORRELATION_ID_HEADER];
-      const id = (Array.isArray(existing) ? existing[0] : existing) || randomUUID();
+      const candidate = Array.isArray(existing) ? existing[0] : existing;
+      const id = candidate && /^[A-Za-z0-9_-]{1,128}$/.test(candidate) ? candidate : randomUUID();
       // Pantulkan balik ke response supaya klien/gateway bisa melihatnya.
       res.setHeader(CORRELATION_ID_HEADER, id);
       return id;
@@ -76,6 +93,11 @@ export function createHttpLogger(logger: Logger): HttpLogger {
     customProps(req) {
       return { correlationId: req.id };
     },
+    // Jejak audit: baris "request completed/errored" mencatat SIAPA pelakunya. Tanpa
+    // ini aksi istimewa (hapus produk, ubah status order, baca outbox) tidak bisa
+    // ditelusuri ke akun mana pun, karena header Authorization disensor.
+    customSuccessObject: (req, _res, val: object) => ({ ...val, ...actorOf(req) }),
+    customErrorObject: (req, _res, _err, val: object) => ({ ...val, ...actorOf(req) }),
     // 4xx = warn, 5xx = error, sisanya info. Bukan semua request jadi error.
     customLogLevel(_req, res, err) {
       if (err || res.statusCode >= 500) return 'error';

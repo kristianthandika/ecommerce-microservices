@@ -11,9 +11,14 @@ const server = app.listen(config.port, () => {
   );
 });
 
+server.requestTimeout = 15000;
+server.headersTimeout = 10000;
+
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     logger.info({ signal }, 'shutting down');
+    const deadline = setTimeout(() => process.exit(1), 10000);
+    deadline.unref();
     server.close(() => process.exit(0));
   });
 }

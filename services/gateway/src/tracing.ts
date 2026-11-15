@@ -14,7 +14,6 @@ import type { FastifyPluginCallback } from 'fastify';
  * terbaru sudah DROP dukungan Fastify → tracing gateway gagal DIAM-DIAM).
  */
 const fastifyOtel = new FastifyOtelInstrumentation({
-  servername: 'gateway',
   registerOnInitialization: false,
 });
 

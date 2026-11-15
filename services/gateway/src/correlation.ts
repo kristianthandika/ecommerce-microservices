@@ -1,6 +1,8 @@
 import type { FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fastify';
 import { CORRELATION_ID_HEADER } from '@ecommerce/logger';
 
+const SERVICE_TOKEN_HEADER = 'x-service-token';
+
 /**
  * Correlation ID (m3.2) + penerusan IP klien asli (m3.1) dalam SATU hook.
  *
@@ -11,6 +13,7 @@ import { CORRELATION_ID_HEADER } from '@ecommerce/logger';
  *  - X-Forwarded-For / X-Real-IP berisi IP klien yang benar-benar diamati
  *    gateway. Nilai XFF di-OVERWRITE (bukan diteruskan dari klien) karena
  *    gateway adalah trust boundary — XFF kiriman klien bisa dispoof.
+ *  - header `x-service-token` kiriman klien DIBUANG (hanya sah antar-service).
  */
 export function attachCorrelation(
   request: FastifyRequest,
@@ -25,6 +28,9 @@ export function attachCorrelation(
   request.raw.headers[CORRELATION_ID_HEADER] = id;
   request.raw.headers['x-forwarded-for'] = clientIp;
   request.raw.headers['x-real-ip'] = clientIp;
+  // Kredensial service-ke-service tidak pernah sah datang dari luar: buang di
+  // trust boundary supaya klien publik tidak bisa menyodorkannya ke service internal.
+  delete request.raw.headers[SERVICE_TOKEN_HEADER];
 
   done();
 }

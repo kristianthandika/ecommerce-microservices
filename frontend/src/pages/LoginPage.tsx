@@ -1,14 +1,14 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import logo from '../assets/brand/logo.png';
 import { useAuth } from '../context/AuthContext';
 import { ApiError } from '../api/client';
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, user, ready } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin@inixindo.local');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -18,13 +18,16 @@ export function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate('/dashboard');
+      void navigate('/dashboard');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Gagal login');
     } finally {
       setLoading(false);
     }
   }
+
+  // A restored session (refresh cookie) goes straight to the app.
+  if (ready && user) return <Navigate to="/dashboard" replace />;
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
@@ -36,13 +39,21 @@ export function LoginPage() {
         </p>
 
         <form onSubmit={onSubmit} className="space-y-4" aria-label="form-login">
-          <Field label="Email" type="email" value={email} onChange={setEmail} name="email" />
+          <Field
+            label="Email"
+            type="email"
+            value={email}
+            onChange={setEmail}
+            name="email"
+            autoComplete="username"
+          />
           <Field
             label="Password"
             type="password"
             value={password}
             onChange={setPassword}
             name="password"
+            autoComplete="current-password"
           />
 
           {error && (
@@ -61,10 +72,18 @@ export function LoginPage() {
         </form>
 
         <p className="text-sm text-muted text-center mt-6">
+          <Link to="/forgot-password" className="text-secondary font-medium hover:underline">
+            Lupa password?
+          </Link>
+        </p>
+        <p className="text-sm text-muted text-center mt-2">
           Belum punya akun?{' '}
           <Link to="/register" className="text-secondary font-medium hover:underline">
             Daftar
           </Link>
+        </p>
+        <p className="text-xs text-muted text-center mt-4">
+          Baru mendaftar? Aktifkan akun lewat tautan di email sebelum masuk.
         </p>
       </div>
     </div>
@@ -77,12 +96,15 @@ function Field({
   value,
   onChange,
   name,
+  autoComplete,
 }: {
   label: string;
   type: string;
   value: string;
   onChange: (v: string) => void;
   name: string;
+  // Memberi tahu browser/password manager isi field ini (WCAG 1.3.5).
+  autoComplete: string;
 }) {
   return (
     <label className="block">
@@ -93,6 +115,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required
+        autoComplete={autoComplete}
         className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-secondary focus:ring-1 focus:ring-secondary outline-none"
       />
     </label>

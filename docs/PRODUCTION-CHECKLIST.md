@@ -1,76 +1,17 @@
-# Production Checklist — Dari Prototype Menuju Production
+# Production checklist setelah hardening
 
-Prototype 4 hari ini **berjalan penuh** (5 container lewat `docker compose up`)
-tapi **sengaja** menyederhanakan beberapa hal supaya fokus ke konsep
-microservice. Dokumen ini mencatat kelima item dari silabus yang WAJIB
-ditangani sebelum sistem seperti ini layak production, dan kenapa belum ada di
-prototype.
+Perbaikan audit sudah menambahkan database SQLite per service, transaksi reservasi stok, idempotensi order dan pemulihan PENDING, kredensial bootstrap acak opt-in, secret file, TLS opsional, pembatasan jaringan/resource, backup online, serta workflow CI dan tes regresi/E2E.
 
-> Ini bukan daftar kelalaian — ini peta jalan sadar. Prototype ini dibangun
-> untuk mengajarkan boundary, resilience, dan observability, bukan untuk
-> menyimpan data pelanggan sungguhan.
+Detail implementasi, perintah menjalankan, backup/restore, dan konfigurasi TLS tersedia di [HARDENING.md](HARDENING.md). Dokumen latihan dan keputusan prototype lama harus dibaca sebagai materi historis.
 
-## 1. Database per Service (persisten)
+Sebelum melayani pelanggan nyata:
 
-**Sekarang:** tiap service memakai **in-memory store** (`Map`). Data hilang saat
-container restart (mis. user & produk yang dibuat saat demo).
-
-**Untuk production:** tiap service punya database sendiri (mis. auth →
-PostgreSQL, product → PostgreSQL, order → PostgreSQL/terpisah). Prinsip
-**database per service** dipertahankan (tidak ada shared database — lihat
-`BOUNDARY.md`). Tambahkan migration, connection pool, backup, dan indeks.
-
-## 2. Secret Management
-
-**Sekarang:** kredensial admin demo & konfigurasi lewat environment variable
-biasa; RSA keypair disimpan di Docker volume. Cukup untuk lokal, TIDAK untuk
-production.
-
-**Untuk production:** simpan secret di secret manager (HashiCorp Vault, AWS
-Secrets Manager, Docker/Kubernetes Secrets), rotasi berkala, jangan pernah
-commit ke repo, dan jangan seed admin dengan password default. Keypair RS256
-dikelola & dirotasi lewat KMS.
-
-## 3. Message Queue (komunikasi asynchronous)
-
-**Sekarang:** order→product **sinkron** lewat HTTP (dengan resilience). Cukup
-untuk validasi harga/stok satu langkah.
-
-**Untuk production:** alur multi-langkah lintas service (mis. buat order →
-kurangi stok → pembayaran → notifikasi) lebih baik **asynchronous** lewat
-message queue (RabbitMQ/Kafka/NATS) dengan **Saga pattern** + compensating
-action. Meng-decouple service, menyerap lonjakan beban, dan menghindari
-cascading failure. (Lihat pengantar Saga di `BOUNDARY.md`.)
-
-## 4. Distributed Tracing Penuh
-
-**Sekarang:** tracing **pengantar** — `@fastify/otel` + **ConsoleSpanExporter**
-di gateway saja (span tercetak ke stdout). Cukup untuk memahami konsepnya.
-
-**Untuk production:** ekspor span ke backend tracing (Jaeger/Tempo/Zipkin/
-vendor OTLP), instrumentasikan **semua** service (bukan cuma gateway),
-propagasikan trace context (W3C `traceparent`) lintas HTTP, dan korelasikan
-dengan log & metrics (tiga pilar observability).
-
-## 5. CI/CD per Service
-
-**Sekarang:** build manual lewat `docker compose build`. Test dijalankan
-manual (`npm test`).
-
-**Untuk production:** pipeline CI/CD **per service** — tiap service di-lint,
-di-typecheck, di-test, di-build image, di-scan (SCA/secret), lalu di-deploy
-independen (blue-green/canary). Inilah janji microservice: deploy satu service
-tanpa menyentuh yang lain.
-
----
-
-## Catatan keamanan tambahan yang sudah diterapkan di prototype
-
-Sebagian praktik keamanan dasar SUDAH ada (sesuai silabus Hari 4):
-
-- Container **non-root** (`USER node`), multi-stage build, base image minimal (Alpine).
-- Hanya **gateway** & **frontend** yang expose port; service lain hanya di network internal Docker.
-- **helmet** (security header) + **rate limiting** terpusat di gateway, plus lapisan per-service.
-- **X-Forwarded-For** ditulis gateway (anti-spoof), `trust proxy` dibatasi di service.
-- JWT **RS256** + JWKS (verifikasi terdistribusi tanpa membagikan private key).
-- Password di-hash **bcrypt**; secret tidak di-log (redaction di logger).
+- Tetapkan kapasitas dan SLO. Deployment SQLite yang tersedia mendukung satu host dan satu replica per service. Migrasikan ke database server per service jika membutuhkan multi-host atau horizontal scaling.
+- Sediakan secret dari platform, certificate chain yang dipercaya, renewal, kebijakan rotasi JWT dengan overlap JWKS/KMS, dan ingress/firewall yang sesuai.
+- Jadwalkan backup ke lokasi di luar host, sertakan signing key, dan latih restore serta rekonsiliasi lintas service.
+- Tambahkan metrics, alert, tracing seluruh hop, dan image scanning. Audit npm pada sesi perbaikan sudah bersih; hasil ini bukan jaminan seluruh image OS bebas kerentanan.
+- Implementasikan pembayaran/pengiriman/refund dengan state machine dan kompensasi, mengikuti pola saga pembatalan yang sudah ada. Workflow saat ini mengalokasikan dan dapat melepas stok, tetapi belum menagih.
+- Tetapkan batas tahan stok sesuai kebijakan bisnis (`ORDER_MAX_OPEN_ORDERS`, `ORDER_MAX_UNITS_PER_PRODUCT`). Verifikasi email sebelum pemesanan sudah diwajibkan; gunakan pengiriman nyata melalui `docker-compose.mail.yml`, relay HTTPS dan secret, dengan `MAIL_ALLOW_INSECURE_OUTBOX=false`. Kotak surat simulasi bukan bukti kepemilikan email untuk pelanggan nyata. Evaluasi CAPTCHA bila risiko multi-akun memerlukannya. Pantau log `jalur API tanpa versi` dan matikan alias lama (`LEGACY_API_ENABLED=false`) setelah tidak dipakai, paling lambat tanggal `LEGACY_API_SUNSET` (OWASP API9). Lihat [OWASP-API-SECURITY.md](OWASP-API-SECURITY.md).
+- Pantau kesehatan auth-service: cache pencabutan sesi yang kedaluwarsa menyebabkan operasi terproteksi menjawab 503 hingga daftar pencabutan dapat disinkronkan. Latih prosedur ini sebelum deployment.
+- Konfigurasikan registry, deployment target, approval organisasi, dan jalankan workflow CI di hosting GitHub. Workflow lokal sudah tersedia; publishing/deployment belum dilakukan.
+- Lengkapi load test representatif dan browser E2E di runner yang mendukung browser. Tes component dan API E2E lokal sudah dijalankan; akses Firefox interaktif pada mesin ini diblokir oleh alat computer-use.

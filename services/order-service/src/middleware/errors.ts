@@ -34,10 +34,31 @@ export function errorHandler(
   err: unknown,
   req: Request,
   res: Response,
-   
+
   _next: NextFunction,
 ): void {
-  req.log?.error({ err }, 'request gagal');
+  const parserError = err as { type?: string };
+  const parserStatus =
+    parserError?.type === 'entity.parse.failed'
+      ? 400
+      : parserError?.type === 'entity.too.large'
+        ? 413
+        : undefined;
+  if (parserStatus) {
+    res.status(parserStatus).json({
+      error: {
+        message: parserStatus === 400 ? 'JSON tidak valid' : 'Payload terlalu besar',
+        code: parserStatus === 400 ? 'INVALID_JSON' : 'PAYLOAD_TOO_LARGE',
+      },
+    });
+    return;
+  }
+  const clientStatus = clientErrorStatus(err);
+  req.log?.[
+    (err instanceof AppError && err.status < 500) || err instanceof ZodError || clientStatus
+      ? 'warn'
+      : 'error'
+  ]({ err }, 'request gagal');
 
   if (err instanceof ZodError) {
     res.status(400).json({
@@ -57,6 +78,30 @@ export function errorHandler(
     return;
   }
 
+  // Request yang cacat sebelum sampai ke route (percent-encoding rusak di URL,
+  // Content-Encoding/charset tak didukung, body terkompresi rusak) adalah kesalahan
+  // klien. Tanpa cabang ini siapa pun bisa memicu 500 sesuka hati dan memenuhi log
+  // error/alert dengan kegagalan palsu. Pesan aslinya tidak diteruskan ke klien.
+  if (clientStatus) {
+    res.status(clientStatus).json({
+      error: {
+        message: 'Request tidak valid',
+        code: clientStatus === 415 ? 'UNSUPPORTED_MEDIA_TYPE' : 'BAD_REQUEST',
+      },
+    });
+    return;
+  }
+
   // Error tak terduga → 500 generik, jangan bocorkan detail internal.
   res.status(500).json({ error: { message: 'Terjadi kesalahan internal', code: 'INTERNAL' } });
+}
+
+/** Status 4xx yang ditempelkan Express/body-parser pada error-nya (konvensi http-errors). */
+function clientErrorStatus(err: unknown): number | undefined {
+  if (err instanceof AppError || err instanceof ZodError) return undefined;
+  const { status, statusCode } = (err ?? {}) as { status?: unknown; statusCode?: unknown };
+  const value = typeof status === 'number' ? status : statusCode;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 400 && value < 500
+    ? value
+    : undefined;
 }

@@ -1,0 +1,15 @@
+# Real email delivery; combine with TLS for deployment. No mail provider credentials are bundled.
+# docker compose -f docker-compose.yml -f docker-compose.tls.yml -f docker-compose.mail.yml up -d --build
+services:
+  auth-service:
+    environment:
+      EMAIL_VERIFICATION_REQUIRED: 'true'
+      MAIL_TRANSPORT: webhook
+      MAIL_ALLOW_INSECURE_OUTBOX: 'false'
+      MAIL_WEBHOOK_URL: ${MAIL_WEBHOOK_URL:?Set an HTTPS mail relay URL}
+      PUBLIC_APP_URL: ${FRONTEND_ORIGIN:?Set the HTTPS public frontend origin}
+    # Only auth-service needs outbound access to the operator's mail relay.
+    # The base backend network remains internal and no host port is published here.
+    networks: [backend, mail-egress]
+networks:
+  mail-egress:
