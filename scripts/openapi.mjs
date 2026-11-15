@@ -287,6 +287,7 @@ const pagination = queryParameters(orderSchemas.paginationSchema, {
   q: 'Cari pada ID order atau nama penerima.',
 });
 
+// TODO m12.6 — dokumentasikan juga detail, pembatalan, dan endpoint admin order.
 const operations = {
   '/auth/register': {
     post: {
@@ -607,90 +608,7 @@ const operations = {
       },
     },
   },
-  '/orders/{id}': {
-    parameters: [pathId],
-    get: {
-      operationId: 'getMyOrder',
-      tags: ['orders'],
-      summary: 'Detail order milik pemanggil (order orang lain: 404)',
-      security: bearer,
-      responses: { 200: json('OrderEnvelope'), ...errors(400, 401, 404) },
-    },
-  },
-  '/orders/{id}/cancel': {
-    parameters: [pathId],
-    post: {
-      operationId: 'cancelMyOrder',
-      tags: ['orders'],
-      summary: 'Batalkan order sendiri selama belum diproses',
-      security: bearer,
-      requestBody: body('CancelInput', false),
-      responses: {
-        200: json('OrderEnvelope', { description: 'Dibatalkan, stok dikembalikan' }),
-        202: json('OrderEnvelope', {
-          description: 'Niat batal tersimpan; stok dikembalikan otomatis',
-        }),
-        ...errors(400, 401, 404, 409),
-      },
-    },
-  },
-  '/orders/admin': {
-    get: {
-      operationId: 'listAllOrders',
-      tags: ['orders', 'admin'],
-      summary: 'Semua order (admin)',
-      security: bearer,
-      parameters: pagination,
-      responses: { 200: json('OrderPage'), ...errors(400, 401, 403) },
-    },
-  },
-  '/orders/admin/summary': {
-    get: {
-      operationId: 'orderSummary',
-      tags: ['orders', 'admin'],
-      summary: 'Ringkasan order (admin)',
-      security: bearer,
-      responses: { 200: json('OrderSummary'), ...errors(401, 403) },
-    },
-  },
-  '/orders/admin/{id}': {
-    parameters: [pathId],
-    get: {
-      operationId: 'getAnyOrder',
-      tags: ['orders', 'admin'],
-      summary: 'Detail order mana pun (admin)',
-      security: bearer,
-      responses: { 200: json('OrderEnvelope'), ...errors(400, 401, 403, 404) },
-    },
-  },
-  '/orders/admin/{id}/fulfillment': {
-    parameters: [pathId],
-    patch: {
-      operationId: 'updateFulfillment',
-      tags: ['orders', 'admin'],
-      summary: 'Majukan status pemenuhan: NEW → PROCESSING → COMPLETED (admin)',
-      security: bearer,
-      requestBody: body('FulfillmentUpdate'),
-      responses: { 200: json('OrderEnvelope'), ...errors(400, 401, 403, 404, 409) },
-    },
-  },
-  '/orders/admin/{id}/cancel': {
-    parameters: [pathId],
-    post: {
-      operationId: 'cancelAnyOrder',
-      tags: ['orders', 'admin'],
-      summary: 'Batalkan order yang belum selesai (admin)',
-      security: bearer,
-      requestBody: body('CancelInput', false),
-      responses: {
-        200: json('OrderEnvelope', { description: 'Dibatalkan, stok dikembalikan' }),
-        202: json('OrderEnvelope', {
-          description: 'Niat batal tersimpan; stok dikembalikan otomatis',
-        }),
-        ...errors(400, 401, 403, 404, 409),
-      },
-    },
-  },
+
   '/openapi.json': {
     get: {
       operationId: 'openapi',
