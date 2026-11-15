@@ -1,57 +1,95 @@
-# Latihan per Fitur (Starter/Solution)
+# Lab Praktikum: E-Commerce Microservices
 
-> **Tambahan setelah prototype:** [paket materi lanjutan](../materi-lanjutan/README.md) menyediakan latihan L0–L9 untuk source terkini, termasuk hardening, cart/checkout, history/admin, dan header/footer. Fitur lanjutan m12.x di bagian bawah halaman ini memiliki pasangan branch starter/solution sendiri.
+Folder ini berisi panduan langkah demi langkah untuk membangun sistem e-commerce
+microservice dari repo kosong sampai versi lengkap yang ada di branch `main`.
+Setiap lab adalah satu fitur. Lab disusun berurutan dan **saling menyambung**:
+hasil akhir satu lab menjadi titik awal lab berikutnya.
 
-Satu file `.md` per fitur (`mX.Y`). Tiap file berisi: tujuan, yang perlu
-dibangun, acceptance, dan **jebakan debugging spesifik** fitur itu.
+**Baru pertama kali?** Baca dulu [Panduan Pemula](00-panduan-pemula.md). Panduan
+itu menjelaskan alat yang perlu dipasang, cara berpindah branch, cara menjalankan
+tes, dan apa yang harus dilakukan bila terjadi error.
 
-Untuk tiap fitur ada sepasang branch:
+## Cara kerja branch
 
-- `starter/mX.Y-…` — kondisi SEBELUM + file latihan ini (implementasi belum ada).
-- `solution/mX.Y-…` — kondisi SESUDAH (implementasi lengkap + test lulus).
+Setiap lab punya dua branch:
 
-Di branch mana pun, `docs/exercises/` berisi file untuk seluruh fitur **sampai
-titik itu** (akumulatif), jadi `ls docs/exercises/` menunjukkan latihan yang
-sudah tersedia. Solution satu fitur menjadi starter fitur berikutnya.
+| Branch           | Isinya                                                       | Dipakai untuk   |
+| ---------------- | ------------------------------------------------------------ | --------------- |
+| `starter/<lab>`  | Kode **sebelum** fitur dibuat, ditambah panduan lab ini      | Titik awal Anda |
+| `solution/<lab>` | Kode **sesudah** fitur dibuat, lengkap dengan tes yang lulus | Kunci jawaban   |
 
-Buka starter & solution berdampingan dengan helper:
+Semua branch membentuk **satu garis lurus**:
 
-```bash
-bash scripts/dev/worktrees.sh m2.2      # buat 2 worktree: starter & solution
-bash scripts/dev/worktrees.sh --list    # daftar fitur
-bash scripts/dev/worktrees.sh --clean   # bersihkan semua worktree
+```
+starter/m0.1 → solution/m0.1 → starter/m0.2 → solution/m0.2 → … → solution/m4.5
+  → bridge/m5-m11-materi-lanjutan
+  → starter/m12.1 → solution/m12.1 → … → solution/m12.12  (isinya sama dengan main)
 ```
 
-## Daftar fitur
+- `starter/<lab berikutnya>` = `solution/<lab sebelumnya>` + panduan lab berikutnya.
+  Jadi setelah menyelesaikan satu lab, Anda bisa langsung pindah ke starter lab
+  berikutnya tanpa kehilangan apa pun.
+- **Modul 0–4** membangun sistem dari nol. Di starter, kode fitur itu belum ada sama
+  sekali; Anda menulisnya sendiri.
+- **Jembatan M5–M11** membawa Anda ke kode lengkap yang dipakai
+  materi lanjutan (`docs/materi-lanjutan/`, tersedia mulai branch jembatan): SQLite, keranjang,
+  checkout, riwayat, admin, dan hardening. Modul M5–M11 berupa studi kode dan
+  praktikum terhadap sistem yang berjalan, bukan menulis fitur dari nol.
+- **Modul 12** memakai kode lengkap itu. Di setiap starter, **satu fitur dicabut** dan
+  diganti tanda `TODO m12.x`. Tes fitur itu gagal; tugas Anda membuatnya lulus lagi
+  tanpa merusak tes lain.
 
-| Modul | Fitur                                                                         |
-| ----- | ----------------------------------------------------------------------------- |
-| 0     | [m0.1 — Monorepo Bootstrap](m0.1-monorepo-bootstrap.md)                       |
-| 0     | [m0.2 — Brand & Shared Infrastructure](m0.2-brand-shared-infra.md)            |
-| 1     | [m1.1 — Service Boundary Design](m1.1-service-boundary.md)                    |
-| 1     | [m1.2 — auth-service Bootstrap & Security](m1.2-auth-bootstrap.md)            |
-| 1     | [m1.3 — Register/Login, JWT RS256, JWKS](m1.3-auth-jwt-jwks.md)               |
-| 2     | [m2.1 — product-service & Distributed Auth](m2.1-product-distributed-auth.md) |
-| 2     | [m2.2 — Resilient HTTP Client](m2.2-resilient-http-client.md)                 |
-| 2     | [m2.3 — order-service dengan Chaos Test](m2.3-order-chaos.md)                 |
-| 3     | [m3.1 — API Gateway](m3.1-api-gateway.md)                                     |
-| 3     | [m3.2 — Correlation ID](m3.2-correlation-id.md)                               |
-| 3     | [m3.3 — Health, Tracing, Load Test](m3.3-health-tracing-loadtest.md)          |
-| 4     | [m4.1 — Frontend Auth Flow](m4.1-frontend-auth.md)                            |
-| 4     | [m4.2 — Live Health Widget](m4.2-health-widget.md)                            |
-| 4     | [m4.3 — Containerization](m4.3-containerization.md)                           |
-| 4     | [m4.4 — Docker Compose](m4.4-docker-compose.md)                               |
-| 4     | [m4.5 — Capstone](m4.5-capstone.md)                                           |
+Perintah singkat untuk membuka starter dan solution berdampingan:
 
-## Fitur lanjutan (m12.x)
+```bash
+bash scripts/dev/worktrees.sh m2.2      # dua folder: starter & solution m2.2
+bash scripts/dev/worktrees.sh --list    # daftar lab
+bash scripts/dev/worktrees.sh --clean   # hapus folder-folder tadi
+```
 
-Fitur berikut dibangun di atas kode final (`feature/materi-lanjutan`). Berbeda dari rantai M0–M4, **setiap pasangan bercabang dari titik yang sama**: `starter/m12.x` adalah kode final dengan satu fitur dicabut, dan `solution/m12.x` mengembalikannya. Urutan pengerjaan bebas, dan `git diff starter/m12.x solution/m12.x` hanya berisi implementasi fitur itu.
+(`scripts/dev/worktrees.sh` baru ada mulai `solution/m4.5-capstone`. Sebelum itu, pakai
+`git diff` seperti dijelaskan di Panduan Pemula.)
 
-| Modul | Fitur                                                                       |
-| ----- | --------------------------------------------------------------------------- |
-| 12    | [m12.1 — Konkurensi keranjang dengan If-Match/ETag](m12.1-cart-if-match.md) |
-| 12    | [m12.2 — Pembatalan order sebagai saga](m12.2-cancel-saga.md)               |
-| 12    | [m12.3 — Refresh token berotasi](m12.3-refresh-session.md)                  |
-| 12    | [m12.4 — Order ke tabel relasional](m12.4-relational-orders.md)             |
-| 12    | [m12.5 — Batas tahan stok per pelanggan (API6)](m12.5-hold-limit.md)        |
-| 12    | [m12.6 — OpenAPI dan versi API (API9)](m12.6-openapi-versioning.md)         |
+## Kebiasaan yang membuat lab lancar
+
+1. Mulai setiap lab dengan `git switch starter/<lab>` lalu `npm ci`.
+2. Jalankan tes **sebelum** mengubah apa pun, supaya Anda tahu kondisi awalnya.
+3. Simpan pekerjaan Anda di branch sendiri (`git switch -c latihan/<lab>`), bukan di
+   branch starter.
+4. Ubah sedikit, jalankan tes, ulangi. Jangan menulis semuanya dulu baru menguji.
+5. Baru buka solution setelah benar-benar mencoba. Bandingkan dengan
+   `git diff starter/<lab> solution/<lab>`.
+
+## Daftar lab
+
+| Modul | Lab                                                                                 | Branch awal                             |
+| ----- | ----------------------------------------------------------------------------------- | --------------------------------------- |
+| 0     | [m0.1 — Monorepo bootstrap](m0.1-monorepo-bootstrap.md)                             | `starter/m0.1-monorepo-bootstrap`       |
+| 0     | [m0.2 — Brand & shared infrastructure](m0.2-brand-shared-infra.md)                  | `starter/m0.2-brand-shared-infra`       |
+| 1     | [m1.1 — Desain batas layanan](m1.1-service-boundary.md)                             | `starter/m1.1-service-boundary`         |
+| 1     | [m1.2 — Bootstrap auth-service & middleware keamanan](m1.2-auth-bootstrap.md)       | `starter/m1.2-auth-bootstrap`           |
+| 1     | [m1.3 — Register/login, JWT RS256, JWKS](m1.3-auth-jwt-jwks.md)                     | `starter/m1.3-auth-jwt-jwks`            |
+| 2     | [m2.1 — product-service & distributed auth](m2.1-product-distributed-auth.md)       | `starter/m2.1-product-distributed-auth` |
+| 2     | [m2.2 — Resilient HTTP client](m2.2-resilient-http-client.md)                       | `starter/m2.2-resilient-http-client`    |
+| 2     | [m2.3 — order-service dengan chaos test](m2.3-order-chaos.md)                       | `starter/m2.3-order-chaos`              |
+| 3     | [m3.1 — API gateway (Fastify)](m3.1-api-gateway.md)                                 | `starter/m3.1-api-gateway`              |
+| 3     | [m3.2 — Correlation ID](m3.2-correlation-id.md)                                     | `starter/m3.2-correlation-id`           |
+| 3     | [m3.3 — Health agregat, tracing, load test](m3.3-health-tracing-loadtest.md)        | `starter/m3.3-health-tracing-loadtest`  |
+| 4     | [m4.1 — Alur login frontend](m4.1-frontend-auth.md)                                 | `starter/m4.1-frontend-auth`            |
+| 4     | [m4.2 — Widget health](m4.2-health-widget.md)                                       | `starter/m4.2-health-widget`            |
+| 4     | [m4.3 — Containerization](m4.3-containerization.md)                                 | `starter/m4.3-containerization`         |
+| 4     | [m4.4 — Docker Compose](m4.4-docker-compose.md)                                     | `starter/m4.4-docker-compose`           |
+| 4     | [m4.5 — Capstone](m4.5-capstone.md)                                                 | `starter/m4.5-capstone`                 |
+| 5–11  | [m5-m11 — Jembatan ke materi lanjutan (M5–M11)](m5-m11-materi-lanjutan.md)          | `bridge/m5-m11-materi-lanjutan`         |
+| 12    | [m12.1 — Konkurensi keranjang dengan If-Match/ETag](m12.1-cart-if-match.md)         | `starter/m12.1-cart-if-match`           |
+| 12    | [m12.2 — Pembatalan order sebagai saga](m12.2-cancel-saga.md)                       | `starter/m12.2-cancel-saga`             |
+| 12    | [m12.3 — Refresh token berotasi](m12.3-refresh-session.md)                          | `starter/m12.3-refresh-session`         |
+| 12    | [m12.4 — Order ke tabel relasional](m12.4-relational-orders.md)                     | `starter/m12.4-relational-orders`       |
+| 12    | [m12.5 — Batas tahan stok per pelanggan (API6)](m12.5-hold-limit.md)                | `starter/m12.5-hold-limit`              |
+| 12    | [m12.6 — OpenAPI dan versi API (API9)](m12.6-openapi-versioning.md)                 | `starter/m12.6-openapi-versioning`      |
+| 12    | [m12.7 — Pencabutan sesi lintas service](m12.7-session-revocation.md)               | `starter/m12.7-session-revocation`      |
+| 12    | [m12.8 — Pendaftaran tanpa enumerasi akun (API2)](m12.8-register-no-enumeration.md) | `starter/m12.8-register-no-enumeration` |
+| 12    | [m12.9 — Verifikasi email dengan password](m12.9-verify-with-password.md)           | `starter/m12.9-verify-with-password`    |
+| 12    | [m12.10 — Lupa password](m12.10-password-reset.md)                                  | `starter/m12.10-password-reset`         |
+| 12    | [m12.11 — Device cookie anti-lockout](m12.11-device-cookie.md)                      | `starter/m12.11-device-cookie`          |
+| 12    | [m12.12 — Hardening gateway](m12.12-gateway-hardening.md)                           | `starter/m12.12-gateway-hardening`      |

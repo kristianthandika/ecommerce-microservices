@@ -25,14 +25,20 @@ usage() {
 }
 
 list_features() {
-  git branch --list 'starter/*' | sed 's#^[* ]*starter/##' | sort
+  # Branch di server ikut dihitung, supaya clone baru (yang belum punya branch
+  # lokal) juga melihat semua lab. Urutan versi: m12.2 sebelum m12.10.
+  { git branch --list 'starter/*'; git branch -r --list 'origin/starter/*'; } \
+    | sed 's#^[* ]*##; s#^origin/##; s#^starter/##' | sort -uV
 }
 
 # resolve <mX.Y|slug> → cetak slug tunggal. Error kalau tak ada, ambigu, atau
 # pasangan solution-nya tidak ada. Tidak memakai `head` (hindari SIGPIPE + pipefail).
 resolve() {
   local q="$1" matches count slug
-  matches="$(git branch --list "starter/${q}*" | sed 's#^[* ]*starter/##')"
+  # ID lengkap ("m12.1") dicocokkan persis dulu, supaya tidak bentrok dengan
+  # m12.10/m12.11/m12.12; baru kemudian sebagai awalan slug ("m12.1-cart").
+  matches="$(list_features | grep -E "^${q//./\\.}-" || true)"
+  [ -n "$matches" ] || matches="$(list_features | grep -F "$q" | grep -E "^${q//./\\.}" || true)"
   count="$(printf '%s' "$matches" | grep -c . || true)"
   if [ "$count" -eq 0 ]; then
     echo "Fitur '$q' tidak ditemukan. Coba --list." >&2
@@ -45,7 +51,8 @@ resolve() {
     exit 1
   fi
   slug="$matches"
-  if ! git show-ref --verify --quiet "refs/heads/solution/${slug}"; then
+  if ! git show-ref --verify --quiet "refs/heads/solution/${slug}" &&
+    ! git show-ref --verify --quiet "refs/remotes/origin/solution/${slug}"; then
     echo "Branch 'solution/${slug}' tidak ada (pasangan solution belum dibuat)." >&2
     exit 1
   fi

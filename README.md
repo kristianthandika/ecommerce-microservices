@@ -88,77 +88,79 @@ npm run lint      # eslint (typescript-eslint)
 
 ## Alur Pelatihan (branch starter/solution)
 
-Selain kode lengkap, repo ini menyediakan **22 fitur** (`mX.Y`)
-sebagai **pasangan branch** untuk praktikum langsung. Tiap fitur punya:
+Repo ini menyediakan **28 lab** (`mX.Y`) dan satu branch jembatan. Semuanya membentuk
+**satu rantai linear**: hasil akhir satu lab adalah titik awal lab berikutnya, dan
+solution lab terakhir identik dengan `main`.
 
-- **`starter/mX.Y-…`** — kondisi SEBELUM fitur + `docs/exercises/mX.Y-….md` (tujuan,
-  yang perlu dibangun, acceptance, dan **jebakan debugging spesifik** fitur itu).
-  Implementasi fitur belum ada — inilah titik mulai peserta.
-- **`solution/mX.Y-…`** — kondisi SESUDAH: implementasi lengkap + test lulus.
+```
+starter/m0.1 → solution/m0.1 → … → solution/m4.5          modul 0–4: bangun dari nol
+  → bridge/m5-m11-materi-lanjutan                         materi lanjutan M5–M11 (kode lengkap)
+  → starter/m12.1 → solution/m12.1 → … → solution/m12.12   modul 12: satu fitur dicabut per lab
+  (= main)
+```
 
-Untuk M0–M4, solution satu fitur menjadi starter fitur berikutnya, jadi seluruhnya
-membentuk rantai berurutan. `solution/m4.5` adalah prototype sebelum hardening;
-kode terkini ada di `feature/materi-lanjutan`.
+- **`starter/<lab>`** — kode sebelum fitur, ditambah panduannya di
+  `docs/exercises/<lab>.md`. Di modul 0–4 fiturnya belum ada sama sekali; di modul 12
+  fiturnya diganti tanda `TODO m12.x` dan tesnya sengaja gagal.
+- **`solution/<lab>`** — kode sesudah fitur selesai, semua tes lulus.
+
+Panduan lengkap untuk pemula (alat yang dipasang, siklus kerja tiap lab, cara membaca
+hasil tes, dan pemecahan masalah): [`docs/exercises/00-panduan-pemula.md`](docs/exercises/00-panduan-pemula.md).
+Daftar semua lab: [`docs/exercises/README.md`](docs/exercises/README.md).
 
 ### Cara memakai di kelas
 
 ```bash
-# 1. Mulai dari starter fitur yang sedang dipelajari
-git checkout starter/m2.2-resilient-http-client
-cat docs/exercises/m2.2-resilient-http-client.md   # tujuan + acceptance + debugging
-
-# 2. Peserta mengimplementasikan fitur...
-npm run build:packages          # bila fitur menyentuh shared package
-npm test                        # jalankan test terkait
-
-# 3. Bandingkan / lihat kunci jawaban
-git diff solution/m2.2-resilient-http-client     # apa yang seharusnya berubah
-git checkout solution/m2.2-resilient-http-client # solusi lengkap + test
+git switch starter/m2.2-resilient-http-client
+npm ci && npm run build:packages        # setiap kali pindah branch
+npm test                                # catat kondisi awal
+git switch -c latihan/m2.2              # kerjakan di branch sendiri
+# ... ikuti docs/exercises/m2.2-resilient-http-client.md ...
+git diff starter/m2.2-resilient-http-client solution/m2.2-resilient-http-client --stat
+git switch starter/m2.3-order-chaos     # lanjut
 ```
 
-`npm install` cukup **sekali** untuk semua branch (dependency root konstan).
-Karena service dijalankan sebagai `.ts` dan shared package dikompilasi, jalankan
-`npm run build:packages` setiap berada di branch yang sudah memuat
-`packages/*` sebelum menjalankan service/test service.
-
-### Peta fitur → branch
-
-| Modul | Fitur (slug branch)             | Fokus                                              |
-| ----- | ------------------------------- | -------------------------------------------------- |
-| 0     | `m0.1-monorepo-bootstrap`       | npm workspaces, toolchain TS                       |
-| 0     | `m0.2-brand-shared-infra`       | `packages/logger`, brand frontend                  |
-| 1     | `m1.1-service-boundary`         | DDD ringan, `docs/BOUNDARY.md`                     |
-| 1     | `m1.2-auth-bootstrap`           | Express 5, security middleware, error handler, zod |
-| 1     | `m1.3-auth-jwt-jwks`            | bcrypt, JWT RS256, JWKS, `kid`                     |
-| 2     | `m2.1-product-distributed-auth` | verifikasi JWT via `jwks-rsa` (cache), RBAC        |
-| 2     | `m2.2-resilient-http-client`    | timeout/retry/circuit breaker manual               |
-| 2     | `m2.3-order-chaos`              | order-service + chaos test                         |
-| 3     | `m3.1-api-gateway`              | Fastify proxy, rate-limit, X-Forwarded-For         |
-| 3     | `m3.2-correlation-id`           | correlation ID lintas service                      |
-| 3     | `m3.3-health-tracing-loadtest`  | health agregat, `@fastify/otel`, autocannon        |
-| 4     | `m4.1-frontend-auth`            | React auth flow, error seragam                     |
-| 4     | `m4.2-health-widget`            | live service-health widget                         |
-| 4     | `m4.3-containerization`         | Dockerfile multi-stage, non-root, nginx            |
-| 4     | `m4.4-docker-compose`           | orkestrasi, healthcheck-gated                      |
-| 4     | `m4.5-capstone`                 | chaos, production checklist, README                |
-| 12    | `m12.1-cart-if-match`           | If-Match/ETag, 412/428                             |
-| 12    | `m12.2-cancel-saga`             | saga, kompensasi idempoten, tombstone              |
-| 12    | `m12.3-refresh-session`         | rotasi refresh token, deteksi pemakaian ulang      |
-| 12    | `m12.4-relational-orders`       | migrasi ke tabel, indeks, cursor keyset            |
-| 12    | `m12.5-hold-limit`              | OWASP API6: batas tahan stok per pelanggan         |
-| 12    | `m12.6-openapi-versioning`      | OWASP API9: OpenAPI dari zod, `/api/v1`, Sunset    |
-
-Fitur m12.x tidak membentuk rantai: tiap pasangan bercabang dari kode final yang sama, sehingga bisa dikerjakan dalam urutan apa pun.
-
-Rincian tiap fitur + jebakan debugging ada sebagai satu file `.md` per fitur di
-[`docs/exercises/`](docs/exercises/) (akumulatif di tiap branch). Untuk membuka
-starter & solution sebuah fitur berdampingan:
+Buka starter dan solution berdampingan:
 
 ```bash
-bash scripts/dev/worktrees.sh m2.2      # buat worktree starter & solution
-bash scripts/dev/worktrees.sh --list    # daftar fitur
+bash scripts/dev/worktrees.sh m2.2      # dua worktree: starter & solution
+bash scripts/dev/worktrees.sh --list    # daftar lab
 bash scripts/dev/worktrees.sh --clean   # bersihkan
 ```
+
+### Peta lab → branch
+
+| Modul | Lab (slug branch)               | Fokus                                                                |
+| ----- | ------------------------------- | -------------------------------------------------------------------- |
+| 0     | `m0.1-monorepo-bootstrap`       | npm workspaces, toolchain TS                                         |
+| 0     | `m0.2-brand-shared-infra`       | `packages/logger`, brand frontend                                    |
+| 1     | `m1.1-service-boundary`         | DDD ringan, `docs/BOUNDARY.md`                                       |
+| 1     | `m1.2-auth-bootstrap`           | Express 5, security middleware, error handler, zod                   |
+| 1     | `m1.3-auth-jwt-jwks`            | bcrypt, JWT RS256, JWKS, `kid`                                       |
+| 2     | `m2.1-product-distributed-auth` | verifikasi JWT via `jwks-rsa` (cache), RBAC                          |
+| 2     | `m2.2-resilient-http-client`    | timeout/retry/circuit breaker manual                                 |
+| 2     | `m2.3-order-chaos`              | order-service + chaos test                                           |
+| 3     | `m3.1-api-gateway`              | Fastify proxy, rate-limit, X-Forwarded-For                           |
+| 3     | `m3.2-correlation-id`           | correlation ID lintas service                                        |
+| 3     | `m3.3-health-tracing-loadtest`  | health agregat, `@fastify/otel`, autocannon                          |
+| 4     | `m4.1-frontend-auth`            | React auth flow, error seragam                                       |
+| 4     | `m4.2-health-widget`            | live service-health widget                                           |
+| 4     | `m4.3-containerization`         | Dockerfile multi-stage, non-root, nginx                              |
+| 4     | `m4.4-docker-compose`           | orkestrasi, healthcheck-gated                                        |
+| 4     | `m4.5-capstone`                 | chaos, production checklist, README                                  |
+| 5–11  | `bridge/m5-m11-materi-lanjutan` | kode lengkap untuk [materi lanjutan](docs/materi-lanjutan/README.md) |
+| 12    | `m12.1-cart-if-match`           | If-Match/ETag, 412/428                                               |
+| 12    | `m12.2-cancel-saga`             | saga, kompensasi idempoten, tombstone                                |
+| 12    | `m12.3-refresh-session`         | rotasi refresh token, deteksi pemakaian ulang                        |
+| 12    | `m12.4-relational-orders`       | migrasi ke tabel, indeks, cursor keyset                              |
+| 12    | `m12.5-hold-limit`              | OWASP API6: batas tahan stok per pelanggan                           |
+| 12    | `m12.6-openapi-versioning`      | OWASP API9: OpenAPI dari zod, `/api/v1`, Sunset                      |
+| 12    | `m12.7-session-revocation`      | daftar pencabutan sesi, fail closed                                  |
+| 12    | `m12.8-register-no-enumeration` | OWASP API2: pendaftaran tanpa enumerasi akun                         |
+| 12    | `m12.9-verify-with-password`    | verifikasi email dengan tautan + password                            |
+| 12    | `m12.10-password-reset`         | lupa password, akhiri semua sesi                                     |
+| 12    | `m12.11-device-cookie`          | device cookie anti-lockout                                           |
+| 12    | `m12.12-gateway-hardening`      | normalisasi path internal, header tepi, timeout                      |
 
 ## Chaos test (capstone)
 

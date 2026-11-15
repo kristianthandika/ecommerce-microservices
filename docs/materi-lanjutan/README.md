@@ -69,7 +69,7 @@ Perintah setup hanya membuat `.env` jika berkas tersebut belum ada. Ia tidak men
 - Fulfillment `NEW → PROCESSING → COMPLETED` terpisah dari status order `PENDING/CONFIRMED/FAILED/CANCELLATION_REQUESTED/CANCELLED`.
 - SQLite tersedia untuk satu host dan satu replica per service. Jangan menyebut implementasi ini siap horizontal scaling lintas host.
 - Access token (15 menit) berada di memory frontend; sesi bertahan setelah refresh halaman melalui refresh token di cookie HttpOnly. Logout mencabut sesi di server.
-- Modul tambahan belum mempunyai pasangan branch `starter/solution` tersendiri. Praktikum menggunakan implementasi saat ini untuk membaca, menguji, dan membuat perubahan terarah pada salinan kerja peserta.
+- Modul M5–M11 dikerjakan di branch `bridge/m5-m11-materi-lanjutan`, yang berisi kode lengkap ini dan menyambung langsung dari `solution/m4.5-capstone`. Praktikumnya membaca, menjalankan, dan menguji sistem itu; lab menulis kode untuk fitur-fitur ini ada di rantai `starter/m12.x` → `solution/m12.x` sesudahnya (lihat [daftar lab](../exercises/README.md)).
 
 Referensi operasional: [hardening](../HARDENING.md), [fitur belanja](../SHOPPING-FEATURES.md), dan [hasil verifikasi](../VERIFICATION.md).
 
