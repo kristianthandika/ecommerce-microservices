@@ -3,7 +3,7 @@ import { config } from './config.ts';
 import { database } from './database.ts';
 import { deliver } from './mailer.ts';
 import { AppError } from './middleware/errors.ts';
-import { markEmailVerified, matchingPasswordHash, type PublicUser } from './users.ts';
+import { markEmailVerified, type PublicUser } from './users.ts';
 
 /**
  * Email verification: an account can sign in only after its address was confirmed.
@@ -102,38 +102,32 @@ export function forgetVerifications(userId: string): void {
 }
 
 /**
- * Confirms the address when the token is valid AND `password` is the account's
- * password. A wrong password leaves the token usable for a few more attempts, then
- * the link is void and a new one has to be requested by registering again.
+ * TODO m12.9 — versi starter mengaktifkan akun hanya dengan TAUTAN. Akibatnya
+ * penyerang bisa mendaftarkan email korban dengan password pilihannya; begitu korban
+ * membuka tautan di emailnya, akun milik penyerang yang aktif (account pre-hijacking).
+ * Ubah supaya tautan DAN password akun keduanya wajib:
+ * 1. cari record token (`pending.get(hash(token))`); tidak ada/kedaluwarsa → `invalid()`;
+ * 2. `matchingPasswordHash(record.userId, password)` dari users.ts (selalu satu bcrypt);
+ * 3. dalam SATU transaksi: baca record lagi; password salah → tambah `attempts`, hapus
+ *    record bila sudah `config.emailVerification.maxPasswordAttempts`, dan kembalikan
+ *    'wrong-password' (penghitung harus ter-commit, jadi JANGAN melempar di dalam transaksi);
+ *    password benar → `markEmailVerified(userId, passwordHash)` lalu `forgetVerifications`;
+ * 4. di luar transaksi: password salah → AppError 401 `INVALID_CREDENTIALS`.
  */
 export async function verifyEmail(
   token: string,
-  password: string,
+  _password: string,
   now = Date.now(),
 ): Promise<PublicUser> {
-  const key = hash(token);
-  const record = pending.get(key);
-  if (!record || record.expiresAt <= now) throw invalid();
-  const passwordHash = await matchingPasswordHash(record.userId, password);
-  // The failed-attempt counter must be committed, so the outcome is returned from
-  // the transaction and only turned into an error afterwards.
-  const outcome = database.transaction((): PublicUser | 'invalid' | 'wrong-password' => {
-    const current = pending.get(key);
-    if (!current || current.expiresAt <= now) return 'invalid';
-    const user = passwordHash === null ? null : markEmailVerified(current.userId, passwordHash);
-    if (!user) {
-      const attempts = (current.attempts ?? 0) + 1;
-      if (attempts >= config.emailVerification.maxPasswordAttempts) pending.delete(key);
-      else pending.set(key, { ...current, attempts });
-      return 'wrong-password';
-    }
-    forgetVerifications(current.userId);
+  return database.transaction(() => {
+    const key = hash(token);
+    const record = pending.get(key);
+    if (!record || record.expiresAt <= now) throw invalid();
+    pending.delete(key);
+    const user = markEmailVerified(record.userId);
+    if (!user) throw invalid();
     return user;
   });
-  if (outcome === 'invalid') throw invalid();
-  if (outcome === 'wrong-password')
-    throw new AppError(401, 'Password salah', undefined, 'INVALID_CREDENTIALS');
-  return outcome;
 }
 
 export function purgeExpiredVerifications(now = Date.now(), batch = 500) {
