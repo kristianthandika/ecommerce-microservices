@@ -186,20 +186,63 @@ async function release(
 export type CancelActor = { role: 'customer'; userId: string } | { role: 'admin' };
 
 /**
- * TODO m12.2 — pembatalan sebagai saga:
- * 1. Dalam transaksi: order milik orang lain → 404; FAILED/COMPLETED → 409
- *    `ORDER_NOT_CANCELLABLE`; pelanggan hanya selama fulfillment NEW; simpan
- *    `CANCELLATION_REQUESTED` (+ cancelledBy, cancelReason) secara durable.
- * 2. Panggil `release(order, ctx)`. Error 5xx → `{ completed: false }` (recovery
- *    menyelesaikannya); selain itu lempar ulang.
+ * Cancels an order (saga with compensation). The intent is stored durably first,
+ * then stock is released; if product-service is unreachable the order stays
+ * CANCELLATION_REQUESTED and the recovery loop finishes the job.
+ *
+ * Customers may cancel until the warehouse starts processing; administrators may
+ * cancel anything not yet completed.
  */
 export async function cancelOrder(
-  _id: string,
-  _actor: CancelActor,
-  _reason: string | undefined,
-  _ctx: { correlationId?: string; signal?: AbortSignal } = {},
+  id: string,
+  actor: CancelActor,
+  reason: string | undefined,
+  ctx: { correlationId?: string; signal?: AbortSignal } = {},
 ): Promise<{ order: Order; completed: boolean }> {
-  throw new AppError(501, 'Belum diimplementasikan (m12.2)', undefined, 'NOT_IMPLEMENTED');
+  const requested = database.transaction(() => {
+    const order = getOrderRow(id);
+    // Same 404 for "missing" and "someone else's" so IDs cannot be probed.
+    if (!order || (actor.role === 'customer' && order.userId !== actor.userId))
+      throw new AppError(404, 'Order tidak ditemukan', undefined, 'NOT_FOUND');
+    if (cancelling(order.status)) return order;
+    if (order.status === 'FAILED')
+      throw new AppError(
+        409,
+        'Order sudah ditolak; tidak ada stok yang perlu dilepas',
+        undefined,
+        'ORDER_NOT_CANCELLABLE',
+      );
+    const fulfillment = order.fulfillmentStatus ?? 'NEW';
+    if (fulfillment === 'COMPLETED')
+      throw new AppError(409, 'Order sudah selesai', undefined, 'ORDER_NOT_CANCELLABLE');
+    if (actor.role === 'customer' && fulfillment !== 'NEW')
+      throw new AppError(
+        409,
+        'Pesanan sudah diproses. Hubungi admin untuk pembatalan.',
+        undefined,
+        'ORDER_NOT_CANCELLABLE',
+      );
+    const now = new Date().toISOString();
+    const updated: StoredOrder = {
+      ...order,
+      status: 'CANCELLATION_REQUESTED',
+      cancelledBy: actor.role,
+      cancelReason: reason || undefined,
+      updatedAt: now,
+    };
+    updateOrderRow(updated);
+    return updated;
+  });
+  if (requested.status === 'CANCELLED') return { order: publicOrder(requested), completed: true };
+  try {
+    const order = await release(requested, ctx);
+    return { order, completed: order.status === 'CANCELLED' };
+  } catch (err) {
+    // The intent is durable; recovery completes it once product-service answers.
+    if (err instanceof AppError && err.status >= 500)
+      return { order: publicOrder(getOrderRow(id)!), completed: false };
+    throw err;
+  }
 }
 
 /**
