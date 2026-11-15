@@ -60,6 +60,8 @@ const CLOCK_SKEW_MS = 60_000;
 const MAX_ACCESS_TOKEN_MS = 3_600_000;
 
 const hash = (token: string) => createHash('sha256').update(token).digest('base64url');
+const invalid = () =>
+  new AppError(401, 'Sesi berakhir. Silakan masuk kembali.', undefined, 'INVALID_REFRESH');
 
 function mint(userId: string, familyId: string, now: number) {
   const family = families.get(familyId)!;
@@ -119,25 +121,44 @@ export type RotationResult =
   | { kind: 'reused'; userId: string };
 
 /**
- * TODO m12.3 — tukar refresh token dengan yang baru, ATOMIK (satu `database.transaction`):
- * - cari record lewat `hash(token)`; tidak ada → 401 `INVALID_REFRESH`
- * - keluarganya tidak ada, sudah dicabut (`revokedAt`), atau lewat `expiresAt` → 401 `INVALID_REFRESH`
- * - token SUDAH dirotasi (`rotatedAt` ada):
- *     - dalam `config.refresh.reuseGraceMs` terakhir → 409 `REFRESH_RACE` (tab lain, bukan pencurian)
- *     - lebih lama dari itu → `revokeFamily(record.familyId, 'reuse', now)` lalu `{ kind: 'reused', userId }`
- * - token sendiri kedaluwarsa (`record.expiresAt`) → 401 `INVALID_REFRESH`
- * - selain itu: simpan `rotatedAt: now`, lalu `{ kind: 'rotated', userId, familyId, ...mint(...) }`
+ * Exchanges a refresh token for a new one. Atomic, so two concurrent requests with
+ * the same token can never both succeed.
  */
-export function rotateSession(_token: string, _now = Date.now()): RotationResult {
-  throw new AppError(501, 'Belum diimplementasikan (m12.3)', undefined, 'NOT_IMPLEMENTED');
+export function rotateSession(token: string, now = Date.now()): RotationResult {
+  return database.transaction(() => {
+    const key = hash(token);
+    const record = tokens.get(key);
+    if (!record) throw invalid();
+    const family = families.get(record.familyId);
+    if (!family || family.revokedAt || now >= family.expiresAt) throw invalid();
+    if (record.rotatedAt !== undefined) {
+      if (now - record.rotatedAt <= config.refresh.reuseGraceMs)
+        throw new AppError(
+          409,
+          'Sesi sedang diperbarui di tab lain. Coba lagi.',
+          undefined,
+          'REFRESH_RACE',
+        );
+      revokeFamily(record.familyId, 'reuse', now);
+      return { kind: 'reused', userId: record.userId };
+    }
+    if (now >= record.expiresAt) throw invalid();
+    tokens.set(key, { ...record, rotatedAt: now });
+    return {
+      kind: 'rotated',
+      userId: record.userId,
+      familyId: record.familyId,
+      ...mint(record.userId, record.familyId, now),
+    };
+  });
 }
 
-/**
- * TODO m12.3 — logout: cari record token (`hash(token)`), lalu `revokeFamily(familyId, 'logout', now)`
- * di dalam transaksi. Token yang tidak dikenal diabaikan (logout harus idempotent).
- */
-export function endSession(_token: string, _now = Date.now()): void {
-  throw new AppError(501, 'Belum diimplementasikan (m12.3)', undefined, 'NOT_IMPLEMENTED');
+/** Ends the session the token belongs to (logout). Unknown tokens are ignored. */
+export function endSession(token: string, now = Date.now()): void {
+  database.transaction(() => {
+    const record = tokens.get(hash(token));
+    if (record) revokeFamily(record.familyId, 'logout', now);
+  });
 }
 
 /**
