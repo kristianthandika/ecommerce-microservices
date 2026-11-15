@@ -22,19 +22,35 @@ const versionSchema = z.uuid();
 /** RFC 9745 structured date: when the body `version` field became deprecated. */
 export const BODY_VERSION_DEPRECATED = `@${Date.UTC(2026, 10, 14) / 1000}`;
 
-/**
- * TODO m12.1 — ganti jalur sementara ini dengan precondition HTTP standar:
- * - `If-Match: "<version>"` → `{ version, conflictStatus: 412 }`
- * - header ada tetapi formatnya salah → 400 `INVALID_PRECONDITION`
- * - tanpa header: `version` di body (jalur lama) tetap diterima dengan
- *   `res.set('Deprecation', BODY_VERSION_DEPRECATED)` dan konflik 409
- * - tanpa keduanya → 428 `PRECONDITION_REQUIRED`
- */
-export function cartPrecondition(req: Request, _res: Response): Precondition {
+export function cartPrecondition(req: Request, res: Response): Precondition {
+  const header = req.get('if-match');
+  if (header !== undefined) {
+    const match = /^"([^"]+)"$/.exec(header.trim());
+    const version = match && versionSchema.safeParse(match[1]);
+    if (!version?.success)
+      throw new AppError(
+        400,
+        'If-Match harus berisi satu ETag keranjang, mis. "<version>"',
+        undefined,
+        'INVALID_PRECONDITION',
+      );
+    return { version: version.data, conflictStatus: 412 };
+  }
   const legacy = versionSchema.safeParse((req.body as { version?: unknown } | undefined)?.version);
-  if (legacy.success) return { version: legacy.data, conflictStatus: 409 };
-  throw new AppError(400, 'version keranjang wajib diisi', undefined, 'VALIDATION_ERROR');
+  if (legacy.success) {
+    res.set('Deprecation', BODY_VERSION_DEPRECATED);
+    return { version: legacy.data, conflictStatus: 409 };
+  }
+  throw new AppError(
+    428,
+    'Header If-Match wajib diisi dengan ETag keranjang terbaru',
+    undefined,
+    'PRECONDITION_REQUIRED',
+  );
 }
 
-/** TODO m12.1 — kirim versi sebagai `ETag: "<version>"` dan `Cache-Control: no-store`. */
-export function sendCartVersion(_res: Response, _version: string): void {}
+/** Exposes the cart version as a strong ETag; never cached, prices are live data. */
+export function sendCartVersion(res: Response, version: string): void {
+  res.set('ETag', `"${version}"`);
+  res.set('Cache-Control', 'no-store');
+}
