@@ -4,9 +4,6 @@ import { database } from './database.ts';
 import { deliver, reserveMail } from './mailer.ts';
 import { AppError } from './middleware/errors.ts';
 import { findAccountByEmail, hashPassword, replacePassword, type PublicUser } from './users.ts';
-import { endAllSessions } from './sessions.ts';
-import { forgetDevices } from './devices.ts';
-import { forgetVerifications } from './verification.ts';
 
 /**
  * Password reset by mailed link.
@@ -74,32 +71,27 @@ export async function requestPasswordReset(email: string, now = Date.now()): Pro
   return true;
 }
 
-/** Sets the new password, verifies the account and ends its sessions, atomically. */
+/**
+ * TODO m12.10 — versi starter mengganti password tetapi:
+ * - tautan bisa dipakai BERULANG (record token tidak dihapus);
+ * - sesi lama (mungkin milik penyerang yang tahu password lama) TETAP hidup;
+ * - perangkat yang dikenal (device cookie) tetap dipercaya;
+ * - pemeriksaan dan penggantian tidak atomik: dua request dengan tautan yang sama
+ *   bisa sama-sama berhasil.
+ * Perbaiki: di dalam SATU `database.transaction` baca record lagi, ganti password
+ * (`replacePassword`), hapus SEMUA token reset akun itu, `forgetVerifications`,
+ * `endAllSessions(userId, 'password-reset', now)` dan `forgetDevices(userId)`.
+ * (Impor yang dibutuhkan: `endAllSessions` dari sessions.ts, `forgetDevices` dari
+ * devices.ts, `forgetVerifications` dari verification.ts.)
+ */
 export async function confirmPasswordReset(
   token: string,
   password: string,
   now = Date.now(),
 ): Promise<PublicUser> {
-  const key = hash(token);
-  const record = resets.get(key);
+  const record = resets.get(hash(token));
   if (!record || record.expiresAt <= now) throw invalid();
-  const passwordHash = await hashPassword(password);
-  const user = database.transaction(() => {
-    // Read again: two requests with the same link must not both succeed.
-    const current = resets.get(key);
-    if (!current || current.expiresAt <= now) return null;
-    const updated = replacePassword(current.userId, passwordHash);
-    if (!updated) return null;
-    database
-      .statement(
-        "DELETE FROM records WHERE namespace='password_resets' AND json_extract(value, '$.userId')=?",
-      )
-      .run(current.userId);
-    forgetVerifications(current.userId);
-    endAllSessions(current.userId, 'password-reset', now);
-    forgetDevices(current.userId);
-    return updated;
-  });
+  const user = replacePassword(record.userId, await hashPassword(password));
   if (!user) throw invalid();
   return user;
 }
