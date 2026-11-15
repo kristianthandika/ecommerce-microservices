@@ -62,13 +62,13 @@ bash scripts/dev/worktrees.sh --clean   # hapus folder-folder tadi
 
 ## Daftar lab
 
-Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (27 lab lagi).
+Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (26 lab lagi).
 
 | Modul | Lab                                                                | Branch awal                             |
 | ----- | ------------------------------------------------------------------ | --------------------------------------- |
 | 0     | [m0.1 — Monorepo bootstrap](m0.1-monorepo-bootstrap.md)            | `starter/m0.1-monorepo-bootstrap`       |
 | 0     | [m0.2 — Brand & shared infrastructure](m0.2-brand-shared-infra.md) | `starter/m0.2-brand-shared-infra`       |
-| 1     | m1.1 — Desain batas layanan                                        | `starter/m1.1-service-boundary`         |
+| 1     | [m1.1 — Desain batas layanan](m1.1-service-boundary.md)            | `starter/m1.1-service-boundary`         |
 | 1     | m1.2 — Bootstrap auth-service & middleware keamanan                | `starter/m1.2-auth-bootstrap`           |
 | 1     | m1.3 — Register/login, JWT RS256, JWKS                             | `starter/m1.3-auth-jwt-jwks`            |
 | 2     | m2.1 — product-service & distributed auth                          | `starter/m2.1-product-distributed-auth` |
