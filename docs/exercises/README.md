@@ -62,7 +62,7 @@ bash scripts/dev/worktrees.sh --clean   # hapus folder-folder tadi
 
 ## Daftar lab
 
-Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (20 lab lagi).
+Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch starter-nya (19 lab lagi).
 
 | Modul | Lab                                                                           | Branch awal                             |
 | ----- | ----------------------------------------------------------------------------- | --------------------------------------- |
@@ -75,7 +75,7 @@ Lab yang namanya belum bertaut panduannya muncul ketika Anda pindah ke branch st
 | 2     | [m2.2 — Resilient HTTP client](m2.2-resilient-http-client.md)                 | `starter/m2.2-resilient-http-client`    |
 | 2     | [m2.3 — order-service dengan chaos test](m2.3-order-chaos.md)                 | `starter/m2.3-order-chaos`              |
 | 3     | [m3.1 — API gateway (Fastify)](m3.1-api-gateway.md)                           | `starter/m3.1-api-gateway`              |
-| 3     | m3.2 — Correlation ID                                                         | `starter/m3.2-correlation-id`           |
+| 3     | [m3.2 — Correlation ID](m3.2-correlation-id.md)                               | `starter/m3.2-correlation-id`           |
 | 3     | m3.3 — Health agregat, tracing, load test                                     | `starter/m3.3-health-tracing-loadtest`  |
 | 4     | m4.1 — Alur login frontend                                                    | `starter/m4.1-frontend-auth`            |
 | 4     | m4.2 — Widget health                                                          | `starter/m4.2-health-widget`            |
